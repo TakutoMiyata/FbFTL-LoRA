@@ -11,7 +11,9 @@ import sys
 from datetime import datetime
 
 # Add src directory to path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+src_path = os.path.join(os.path.dirname(__file__), 'src')
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
 
 from experiment_controller import FedSAFTLExperiment
 

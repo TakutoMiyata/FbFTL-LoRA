@@ -1,0 +1,5 @@
+2025-08-30 16:44:46,846 - __main__ - INFO - Starting FedSA-FTL experiment
+2025-08-30 16:44:46,846 - __main__ - INFO - Configuration file: configs/cifar10_vit_base.json
+2025-08-30 16:44:46,847 - __main__ - INFO - Loaded configuration for experiment: FedSA-FTL_CIFAR10_ViT
+2025-08-30 16:44:46,849 - __main__ - INFO - Setting up data...
+2025-08-30 16:44:46,850 - experiment_controller - INFO - Setting up cifar10 dataset for 10 clients (alpha=0.5)

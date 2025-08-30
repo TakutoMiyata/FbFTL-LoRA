@@ -14,6 +14,7 @@ sys.path.insert(0, str(project_root / "src"))
 
 def test_environment():
     """環境設定をテスト"""
+    import os
     print("🔍 環境テストを開始します...")
     
     # 基本パッケージのテスト
@@ -29,19 +30,25 @@ def test_environment():
     
     # インポートテスト
     try:
-        from fedsa_ftl_model import FedSAFTLModel
+        src_path = os.path.join(os.path.dirname(__file__), 'src')
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        
+        from fedsa_ftl_model import FedSAFTLModel, create_vision_model
         from fedsa_ftl_client import FedSAFTLClient
         from fedsa_ftl_server import FedSAFTLServer
         print("✅ FedSA-FTL モジュールのインポート成功")
     except ImportError as e:
         print(f"❌ インポートエラー: {e}")
+        print(f"📁 現在のディレクトリ: {os.getcwd()}")
+        print(f"📁 srcディレクトリ存在確認: {os.path.exists(src_path)}")
         return False
     
     # 簡単なモデル作成テスト
     try:
         print("🧪 モデル作成テスト...")
-        model = FedSAFTLModel.create_vision_model(
-            model_name="google/vit-base-patch16-224",
+        model = create_vision_model(
+            model_name="vit_base",
             num_classes=10,
             lora_rank=16
         )
@@ -51,10 +58,16 @@ def test_environment():
         dummy_input = torch.randn(2, 3, 224, 224)
         with torch.no_grad():
             output = model(dummy_input)
-        print(f"✅ 推論テスト成功: 出力形状 {output.shape}")
+            if hasattr(output, 'shape'):
+                print(f"✅ 推論テスト成功: 出力形状 {output.shape}")
+            elif hasattr(output, 'logits'):
+                print(f"✅ 推論テスト成功: 出力形状 {output.logits.shape}")
+            else:
+                print(f"✅ 推論テスト成功: 出力タイプ {type(output)}")
         
     except Exception as e:
         print(f"❌ モデルテストエラー: {e}")
+        print(f"詳細: {type(e).__name__}")
         return False
     
     print("🎉 すべてのテストが成功しました！")

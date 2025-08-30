@@ -10,7 +10,7 @@ import copy
 import logging
 import numpy as np
 from collections import OrderedDict
-from .fedsa_ftl_model import FedSAFTLModel
+from fedsa_ftl_model import FedSAFTLModel
 
 logger = logging.getLogger(__name__)
 

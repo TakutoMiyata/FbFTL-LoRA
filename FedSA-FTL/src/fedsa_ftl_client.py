@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from typing import Dict, List, Tuple, Optional
 import copy
 import logging
-from .fedsa_ftl_model import FedSAFTLModel
+from fedsa_ftl_model import FedSAFTLModel
 
 logger = logging.getLogger(__name__)
 

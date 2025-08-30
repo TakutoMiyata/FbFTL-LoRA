@@ -156,12 +156,19 @@ class FedSAFTLModel(nn.Module):
         with torch.no_grad():
             features = self.backbone(x)
             
-        # If backbone returns a tuple (e.g., some Vision Transformers), take the first element
-        if isinstance(features, tuple):
+        # Handle different output formats from backbone
+        if hasattr(features, 'last_hidden_state'):
+            # Transformer models (e.g., ViT)
+            features = features.last_hidden_state[:, 0]  # Take [CLS] token
+        elif hasattr(features, 'pooler_output'):
+            # Some models with pooler output
+            features = features.pooler_output
+        elif isinstance(features, tuple):
+            # Tuple output, take the first element
             features = features[0]
-            
-        # Handle classification token for ViT
-        if len(features.shape) == 3:  # [batch_size, seq_len, hidden_dim]
+            if len(features.shape) == 3:  # [batch_size, seq_len, hidden_dim]
+                features = features[:, 0]  # Take [CLS] token
+        elif len(features.shape) == 3:  # [batch_size, seq_len, hidden_dim]
             features = features[:, 0]  # Take [CLS] token
             
         return self.head(features)
