@@ -1,0 +1,6 @@
+[submodule "FedSA-FTL/Feature-based-Federated-Transfer-Learning"]
+	path = FedSA-FTL/Feature-based-Federated-Transfer-Learning
+	url = https://github.com/wfwf10/Feature-based-Federated-Transfer-Learning.git
+[submodule "FedSA-FTL/FedSA-LoRA"]
+	path = FedSA-FTL/FedSA-LoRA
+	url = https://github.com/Pengxin-Guo/FedSA-LoRA.git
