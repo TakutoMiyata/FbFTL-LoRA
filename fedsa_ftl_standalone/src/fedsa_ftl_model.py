@@ -8,6 +8,7 @@ import torch.nn as nn
 from transformers import ViTModel, ViTConfig
 from peft import LoraConfig, get_peft_model, TaskType
 import copy
+import math
 
 
 class FedSAFTLModel(nn.Module):
@@ -131,7 +132,7 @@ class LoRALinear(nn.Module):
         
         # Initialize B to zero for zero initialization of BA
         nn.init.zeros_(self.lora_B)
-        nn.init.kaiming_uniform_(self.lora_A, a=torch.sqrt(torch.tensor(5.0)))
+        nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
     
     def forward(self, x):
         # Regular linear transformation with frozen weights
