@@ -13,19 +13,20 @@ import copy
 class FedSAFTLServer:
     """
     FedSA-FTL Server for federated aggregation
+    Note: Server only manages A matrices, B matrices stay with clients
     """
     
-    def __init__(self, model: nn.Module, device: torch.device = None):
+    def __init__(self, device: torch.device = None):
         """
         Initialize FedSA-FTL server
         
         Args:
-            model: Global FedSAFTLModel instance
             device: Device to run aggregation on
         """
-        self.global_model = model
         self.device = device if device else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.global_model.to(self.device)
+        
+        # Server only stores A matrices, not a full model
+        self.global_A_params = {}
         
         # Training history
         self.history = {
@@ -83,22 +84,22 @@ class FedSAFTLServer:
         
         return aggregated_A_params
     
-    def update_global_model(self, aggregated_A_params: Dict):
+    def update_global_A_params(self, aggregated_A_params: Dict):
         """
-        Update global model with aggregated A matrices
+        Update global A matrices
         
         Args:
             aggregated_A_params: Aggregated A matrices
         """
-        self.global_model.set_lora_params(aggregated_A_params, matrix_type='A')
+        self.global_A_params = aggregated_A_params
     
-    def federated_round(self, client_updates: List[Dict], test_dataloader=None) -> Dict:
+    def federated_round(self, client_updates: List[Dict], client_test_results: List[Dict] = None) -> Dict:
         """
         Execute one round of federated learning
         
         Args:
             client_updates: List of client updates
-            test_dataloader: Optional test dataloader for evaluation
+            client_test_results: Optional list of client test results
         
         Returns:
             Round statistics
@@ -112,8 +113,8 @@ class FedSAFTLServer:
         # Aggregate A matrices
         aggregated_A_params = self.aggregate_lora_A_matrices(client_updates)
         
-        # Update global model
-        self.update_global_model(aggregated_A_params)
+        # Update global A parameters
+        self.update_global_A_params(aggregated_A_params)
         
         # Calculate communication cost (only A matrices)
         communication_cost = sum(
@@ -131,58 +132,26 @@ class FedSAFTLServer:
             'communication_cost_mb': communication_cost / (1024 * 1024)
         }
         
-        # Evaluate on test set if provided
-        if test_dataloader is not None:
-            test_metrics = self.evaluate(test_dataloader)
+        # Add test results if provided (from client evaluations)
+        if client_test_results:
+            avg_test_loss = np.mean([result['loss'] for result in client_test_results])
+            avg_test_accuracy = np.mean([result['accuracy'] for result in client_test_results])
             round_stats.update({
-                'test_loss': test_metrics['loss'],
-                'test_accuracy': test_metrics['accuracy']
+                'test_loss': avg_test_loss,
+                'test_accuracy': avg_test_accuracy
             })
+            
+            # Update history
+            self.history['test_loss'].append(avg_test_loss)
+            self.history['test_accuracy'].append(avg_test_accuracy)
         
         # Update history
         self.history['round'].append(self.current_round)
         self.history['train_loss'].append(avg_train_loss)
         self.history['train_accuracy'].append(avg_train_accuracy)
-        if test_dataloader is not None:
-            self.history['test_loss'].append(test_metrics['loss'])
-            self.history['test_accuracy'].append(test_metrics['accuracy'])
         self.history['communication_cost'].append(communication_cost)
         
         return round_stats
-    
-    def evaluate(self, dataloader) -> Dict:
-        """
-        Evaluate global model
-        
-        Args:
-            dataloader: Test dataloader
-        
-        Returns:
-            Evaluation metrics
-        """
-        self.global_model.eval()
-        criterion = nn.CrossEntropyLoss()
-        
-        test_loss = 0
-        test_correct = 0
-        test_total = 0
-        
-        with torch.no_grad():
-            for images, labels in dataloader:
-                images, labels = images.to(self.device), labels.to(self.device)
-                
-                outputs = self.global_model(images)
-                loss = criterion(outputs, labels)
-                
-                test_loss += loss.item()
-                _, predicted = outputs.max(1)
-                test_total += labels.size(0)
-                test_correct += predicted.eq(labels).sum().item()
-        
-        return {
-            'loss': test_loss / len(dataloader),
-            'accuracy': 100. * test_correct / test_total
-        }
     
     def get_global_A_params(self) -> Dict:
         """
@@ -191,7 +160,7 @@ class FedSAFTLServer:
         Returns:
             Global A matrices
         """
-        return self.global_model.get_lora_params(matrix_type='A')
+        return self.global_A_params.copy() if self.global_A_params else {}
     
     def save_checkpoint(self, filepath: str):
         """
@@ -202,9 +171,8 @@ class FedSAFTLServer:
         """
         checkpoint = {
             'round': self.current_round,
-            'global_A_params': self.get_global_A_params(),
-            'history': self.history,
-            'model_config': self.global_model.lora_config
+            'global_A_params': self.global_A_params,
+            'history': self.history
         }
         torch.save(checkpoint, filepath)
         print(f"Checkpoint saved to {filepath}")
@@ -218,7 +186,7 @@ class FedSAFTLServer:
         """
         checkpoint = torch.load(filepath, map_location=self.device)
         self.current_round = checkpoint['round']
-        self.update_global_model(checkpoint['global_A_params'])
+        self.global_A_params = checkpoint['global_A_params']
         self.history = checkpoint['history']
         print(f"Checkpoint loaded from {filepath}")
     
