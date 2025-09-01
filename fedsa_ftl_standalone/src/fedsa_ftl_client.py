@@ -51,10 +51,10 @@ class FedSAFTLClient:
         Returns:
             Dictionary containing training metrics and parameters
         """
-        # Training configuration
-        num_epochs = config.get('local_epochs', 5)
-        lr = config.get('learning_rate', 1e-3)
-        weight_decay = config.get('weight_decay', 1e-4)
+        # Training configuration (ensure numeric types)
+        num_epochs = int(config.get('local_epochs', 5))
+        lr = float(config.get('learning_rate', 1e-3))
+        weight_decay = float(config.get('weight_decay', 1e-4))
         
         # Initialize optimizer (only optimize LoRA parameters)
         optimizer = self._get_optimizer(lr, weight_decay)

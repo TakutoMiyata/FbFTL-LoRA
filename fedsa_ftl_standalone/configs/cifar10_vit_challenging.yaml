@@ -42,5 +42,5 @@ federated:
 # Training configuration
 training:
   local_epochs: 3  # Fewer local epochs
-  learning_rate: 5e-4  # Lower learning rate
-  weight_decay: 1e-4
+  learning_rate: 0.0005  # 5e-4 - Lower learning rate
+  weight_decay: 0.0001  # 1e-4

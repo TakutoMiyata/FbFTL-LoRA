@@ -51,5 +51,5 @@ federated:
 # Training configuration
 training:
   local_epochs: 5
-  learning_rate: 1e-3
-  weight_decay: 1e-4
+  learning_rate: 0.001  # Avoid scientific notation
+  weight_decay: 0.0001  # Avoid scientific notation

@@ -44,8 +44,8 @@ quick_config = {
     },
     'training': {
         'local_epochs': 2,  # Few epochs for quick testing
-        'learning_rate': 1e-3,
-        'weight_decay': 1e-4
+        'learning_rate': 0.001,  # 1e-3
+        'weight_decay': 0.0001  # 1e-4
     }
 }
 
