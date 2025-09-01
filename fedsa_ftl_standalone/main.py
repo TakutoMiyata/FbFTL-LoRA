@@ -18,6 +18,7 @@ from src.fedsa_ftl_server import FedSAFTLServer
 from src.data_utils import prepare_federated_data, get_client_dataloader
 from src.privacy_utils import create_privacy_mechanism, SecureAggregation
 from torch.utils.data import DataLoader
+import time
 
 
 def set_seed(seed):
@@ -41,6 +42,9 @@ def load_config(config_path):
 
 def main(config):
     """Main training function"""
+    # Record start time
+    start_time = time.time()
+    
     # Set seed
     set_seed(config['seed'])
     
@@ -235,19 +239,33 @@ def main(config):
     print(f"  Total Communication: {summary['total_communication_mb']:.2f} MB")
     print(f"  Average Communication per Round: {summary['avg_communication_per_round_mb']:.2f} MB")
     
+    # Calculate total duration
+    total_duration = time.time() - start_time
+    print(f"  Total Training Time: {total_duration/3600:.2f} hours")
+    
     # Save results
     results = {
         'config': config,
         'model_stats': model_stats,
         'summary': summary,
         'history': server.history,
-        'final_client_results': all_test_results
+        'final_client_results': all_test_results,
+        'training_duration_seconds': total_duration
     }
     
     results_path = os.path.join(config['experiment']['output_dir'], 'results.json')
     with open(results_path, 'w') as f:
         json.dump(results, f, indent=2)
     print(f"\nResults saved to {results_path}")
+    
+    # Send completion notification
+    try:
+        from notify_completion import notify_from_results
+        notify_from_results(results_path, config['experiment']['name'])
+    except ImportError:
+        print("Completion notification module not available")
+    except Exception as e:
+        print(f"Failed to send completion notification: {e}")
     
     return server, clients
 
