@@ -62,10 +62,13 @@ class FedSAFTLModel(nn.Module):
                 )
     
     def forward(self, pixel_values):
-        # Extract features with frozen backbone
-        with torch.no_grad() if not self.vit.training else torch.enable_grad():
+        # Extract features with frozen backbone (always no grad for frozen layers)
+        with torch.no_grad():
             outputs = self.vit(pixel_values=pixel_values)
             pooled_output = outputs.pooler_output if hasattr(outputs, 'pooler_output') else outputs.last_hidden_state[:, 0]
+        
+        # Detach to ensure no gradients flow back to frozen backbone
+        pooled_output = pooled_output.detach()
         
         # Pass through LoRA-adapted classifier
         logits = self.classifier(pooled_output)
@@ -83,9 +86,9 @@ class FedSAFTLModel(nn.Module):
         for name, module in self.named_modules():
             if isinstance(module, LoRALinear):
                 if matrix_type in ['A', 'both']:
-                    lora_params[f"{name}.lora_A"] = module.lora_A.data
+                    lora_params[f"{name}.lora_A"] = module.lora_A.data.clone()
                 if matrix_type in ['B', 'both']:
-                    lora_params[f"{name}.lora_B"] = module.lora_B.data
+                    lora_params[f"{name}.lora_B"] = module.lora_B.data.clone()
         return lora_params
     
     def set_lora_params(self, lora_params, matrix_type='both'):
@@ -98,9 +101,9 @@ class FedSAFTLModel(nn.Module):
         for name, module in self.named_modules():
             if isinstance(module, LoRALinear):
                 if matrix_type in ['A', 'both'] and f"{name}.lora_A" in lora_params:
-                    module.lora_A.data = lora_params[f"{name}.lora_A"]
+                    module.lora_A.data.copy_(lora_params[f"{name}.lora_A"])
                 if matrix_type in ['B', 'both'] and f"{name}.lora_B" in lora_params:
-                    module.lora_B.data = lora_params[f"{name}.lora_B"]
+                    module.lora_B.data.copy_(lora_params[f"{name}.lora_B"])
 
 
 class LoRALinear(nn.Module):

@@ -35,9 +35,9 @@ quick_config = {
         'verbose': True
     },
     'federated': {
-        'num_clients': 3,  # Few clients for quick testing
+        'num_clients': 10,  # Match the actual data splits
         'num_rounds': 5,  # Few rounds for quick testing
-        'client_fraction': 1.0,  # All clients participate
+        'client_fraction': 0.3,  # Select 30% of clients per round
         'checkpoint_freq': 5,
         'save_best_model': True,
         'aggregation_method': 'fedavg'
@@ -56,7 +56,7 @@ def run_quickstart():
     print("=" * 80)
     print("\nThis will run a small-scale experiment to test the implementation.")
     print("Configuration:")
-    print(f"  - {quick_config['federated']['num_clients']} clients")
+    print(f"  - {quick_config['federated']['num_clients']} clients (selecting {int(quick_config['federated']['client_fraction'] * quick_config['federated']['num_clients'])} per round)")
     print(f"  - {quick_config['federated']['num_rounds']} federated rounds")
     print(f"  - {quick_config['training']['local_epochs']} local epochs per round")
     print(f"  - LoRA rank: {quick_config['model']['lora_r']}")
