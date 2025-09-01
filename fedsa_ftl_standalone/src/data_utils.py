@@ -1,5 +1,5 @@
 """
-Data utilities for CIFAR-10 with non-IID split
+Data utilities for CIFAR-10/CIFAR-100 with non-IID split
 """
 
 import torch
@@ -10,12 +10,13 @@ import numpy as np
 from typing import List, Tuple, Dict
 
 
-def get_cifar10_transforms():
-    """Get CIFAR-10 data transforms for ViT"""
-    # ViT expects 224x224 images
+def get_cifar_transforms():
+    """Get CIFAR data transforms for VGG-16"""
+    # VGG-16 expects 224x224 images, ImageNet normalization
     transform_train = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(10),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
@@ -29,16 +30,26 @@ def get_cifar10_transforms():
     return transform_train, transform_test
 
 
-def load_cifar10_data(data_dir='./data'):
-    """Load CIFAR-10 dataset"""
-    transform_train, transform_test = get_cifar10_transforms()
+def load_cifar_data(dataset_name='cifar100', data_dir='./data'):
+    """Load CIFAR dataset"""
+    transform_train, transform_test = get_cifar_transforms()
     
-    trainset = torchvision.datasets.CIFAR10(
-        root=data_dir, train=True, download=True, transform=transform_train
-    )
-    testset = torchvision.datasets.CIFAR10(
-        root=data_dir, train=False, download=True, transform=transform_test
-    )
+    if dataset_name.lower() == 'cifar100':
+        trainset = torchvision.datasets.CIFAR100(
+            root=data_dir, train=True, download=True, transform=transform_train
+        )
+        testset = torchvision.datasets.CIFAR100(
+            root=data_dir, train=False, download=True, transform=transform_test
+        )
+    elif dataset_name.lower() == 'cifar10':
+        trainset = torchvision.datasets.CIFAR10(
+            root=data_dir, train=True, download=True, transform=transform_train
+        )
+        testset = torchvision.datasets.CIFAR10(
+            root=data_dir, train=False, download=True, transform=transform_test
+        )
+    else:
+        raise ValueError(f"Unsupported dataset: {dataset_name}. Use 'cifar10' or 'cifar100'")
     
     return trainset, testset
 
@@ -127,14 +138,14 @@ def get_client_dataloader(dataset, client_indices: List[int], batch_size: int,
     return DataLoader(client_dataset, batch_size=batch_size, shuffle=shuffle)
 
 
-def analyze_data_distribution(dataset, client_indices: List[List[int]], num_classes: int = 10):
+def analyze_data_distribution(dataset, client_indices: List[List[int]], num_classes: int = 100):
     """
     Analyze and print data distribution across clients
     
     Args:
         dataset: Full dataset
         client_indices: Indices for each client
-        num_classes: Number of classes
+        num_classes: Number of classes (100 for CIFAR-100, 10 for CIFAR-10)
     """
     print("\nData Distribution Analysis:")
     print("-" * 50)
@@ -146,11 +157,19 @@ def analyze_data_distribution(dataset, client_indices: List[List[int]], num_clas
         print(f"Client {client_id}: {len(indices)} samples")
         distribution = dict(zip(unique, counts))
         
-        # Print distribution for all classes
-        for class_id in range(num_classes):
-            count = distribution.get(class_id, 0)
-            percentage = (count / len(indices)) * 100 if len(indices) > 0 else 0
-            print(f"  Class {class_id}: {count:4d} ({percentage:5.1f}%)")
+        # For CIFAR-100, show only non-zero classes to avoid clutter
+        if num_classes > 10:
+            print(f"  Classes present: {len(unique)} out of {num_classes}")
+            for class_id in unique:
+                count = distribution[class_id]
+                percentage = (count / len(indices)) * 100
+                print(f"    Class {class_id}: {count:4d} ({percentage:5.1f}%)")
+        else:
+            # Print distribution for all classes (CIFAR-10)
+            for class_id in range(num_classes):
+                count = distribution.get(class_id, 0)
+                percentage = (count / len(indices)) * 100 if len(indices) > 0 else 0
+                print(f"  Class {class_id}: {count:4d} ({percentage:5.1f}%)")
         print()
 
 
@@ -168,8 +187,12 @@ def prepare_federated_data(config: Dict):
     np.random.seed(config.get('seed', 42))
     torch.manual_seed(config.get('seed', 42))
     
-    # Load CIFAR-10 data
-    trainset, testset = load_cifar10_data(config.get('data_dir', './data'))
+    # Load CIFAR data (CIFAR-100 by default, CIFAR-10 optional)
+    dataset_name = config.get('dataset_name', 'cifar100')
+    trainset, testset = load_cifar_data(dataset_name, config.get('data_dir', './data'))
+    
+    # Determine number of classes based on dataset
+    num_classes = 100 if dataset_name.lower() == 'cifar100' else 10
     
     # Create data splits
     num_clients = config.get('num_clients', 10)
@@ -183,6 +206,6 @@ def prepare_federated_data(config: Dict):
     
     # Analyze distribution if verbose
     if config.get('verbose', False):
-        analyze_data_distribution(trainset, client_indices)
+        analyze_data_distribution(trainset, client_indices, num_classes)
     
     return trainset, testset, client_indices

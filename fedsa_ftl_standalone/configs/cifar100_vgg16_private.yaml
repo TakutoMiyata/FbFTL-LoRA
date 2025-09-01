@@ -1,0 +1,57 @@
+# FedSA-FTL Configuration with VGG-16 backbone for CIFAR-100
+# Following FbFTL paper approach with ImageNet pre-trained VGG-16
+
+# Random seed for reproducibility
+seed: 42
+
+# Use GPU if available
+use_gpu: true
+
+# Experiment settings
+experiment:
+  name: fedsa_ftl_cifar100_vgg16_private
+  description: "FedSA-FTL with VGG-16 backbone and differential privacy on CIFAR-100"
+  output_dir: experiments/fedsa_ftl_cifar100_vgg16_private
+
+# Model configuration
+model:
+  num_classes: 100
+  model_name: "vgg16"  # Use VGG-16 backbone like FbFTL paper
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.1
+  freeze_backbone: true
+
+# Data configuration
+data:
+  dataset_name: "cifar100"  # Use CIFAR-100 dataset
+  data_dir: "./data"
+  batch_size: 32
+  num_workers: 2
+  data_split: "non_iid"
+  alpha: 0.5
+  verbose: true
+
+# Privacy configuration
+privacy:
+  enable_privacy: true
+  epsilon: 2.0  # Privacy budget (smaller = more private, typical range: 0.1-10)
+  delta: 0.00001  # Privacy parameter for (ε,δ)-DP (avoid scientific notation in YAML)
+  max_grad_norm: 1.0  # Maximum L2 norm for gradient clipping
+  noise_multiplier: null  # Auto-computed from epsilon if null
+  secure_aggregation: false  # Enable secure aggregation (additional overhead)
+
+# Federated learning configuration
+federated:
+  num_clients: 10
+  num_rounds: 100  # More rounds for CIFAR-100 (100 classes vs 10)
+  client_fraction: 0.3
+  checkpoint_freq: 10
+  save_best_model: true
+  aggregation_method: "fedavg"
+
+# Training configuration
+training:
+  local_epochs: 5
+  learning_rate: 0.001  # Avoid scientific notation
+  weight_decay: 0.0001  # Avoid scientific notation
