@@ -90,20 +90,7 @@ class FedSAFTLServer:
         Args:
             aggregated_A_params: Aggregated A matrices
         """
-        # Debug: Check if parameters are actually being updated
-        if aggregated_A_params:
-            before_params = self.global_model.get_lora_params(matrix_type='A')
-            self.global_model.set_lora_params(aggregated_A_params, matrix_type='A')
-            after_params = self.global_model.get_lora_params(matrix_type='A')
-            
-            # Verify update
-            for key in aggregated_A_params.keys():
-                if key in before_params and key in after_params:
-                    diff = (after_params[key] - before_params[key]).abs().mean().item()
-                    if diff < 1e-6:
-                        print(f"WARNING: Parameter {key} was not updated!")
-        else:
-            self.global_model.set_lora_params(aggregated_A_params, matrix_type='A')
+        self.global_model.set_lora_params(aggregated_A_params, matrix_type='A')
     
     def federated_round(self, client_updates: List[Dict], test_dataloader=None) -> Dict:
         """

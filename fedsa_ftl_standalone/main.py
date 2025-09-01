@@ -114,9 +114,9 @@ def main(config):
             )
             
             # Update client model with global A matrices
-            if round_idx > 0:
-                global_A_params = server.get_global_A_params()
-                clients[client_id].update_model(global_A_params)
+            # Always update, even in first round (to ensure consistency)
+            global_A_params = server.get_global_A_params()
+            clients[client_id].update_model(global_A_params)
             
             # Local training
             print(f"\nTraining client {client_id}...")

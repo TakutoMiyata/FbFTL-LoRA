@@ -35,9 +35,9 @@ quick_config = {
         'verbose': True
     },
     'federated': {
-        'num_clients': 10,  # Match the actual data splits
-        'num_rounds': 5,  # Few rounds for quick testing
-        'client_fraction': 0.3,  # Select 30% of clients per round
+        'num_clients': 5,  # Moderate number for testing
+        'num_rounds': 10,  # More rounds to see convergence
+        'client_fraction': 0.4,  # Select 40% of clients per round
         'checkpoint_freq': 5,
         'save_best_model': True,
         'aggregation_method': 'fedavg'
