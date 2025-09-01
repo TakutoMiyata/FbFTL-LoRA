@@ -25,17 +25,17 @@ class DifferentialPrivacy:
             max_grad_norm: Maximum L2 norm for gradient clipping
             noise_multiplier: Noise scale (if None, computed from epsilon)
         """
-        self.epsilon = epsilon
-        self.delta = delta
-        self.max_grad_norm = max_grad_norm
+        self.epsilon = float(epsilon)  # Ensure float type
+        self.delta = float(delta)  # Ensure float type
+        self.max_grad_norm = float(max_grad_norm)  # Ensure float type
         
         # Compute noise multiplier from privacy budget if not provided
         if noise_multiplier is None:
             # Approximation for Gaussian mechanism
             # σ ≈ sqrt(2 * log(1.25/δ)) / ε
-            self.noise_multiplier = np.sqrt(2 * np.log(1.25 / delta)) / epsilon
+            self.noise_multiplier = np.sqrt(2 * np.log(1.25 / self.delta)) / self.epsilon
         else:
-            self.noise_multiplier = noise_multiplier
+            self.noise_multiplier = float(noise_multiplier)
         
         # Track privacy budget consumption
         self.steps = 0
@@ -269,9 +269,17 @@ def create_privacy_mechanism(config: Dict) -> Optional[DifferentialPrivacy]:
     if not config.get('enable_privacy', False):
         return None
     
+    # Ensure all parameters are properly typed
+    epsilon = float(config.get('epsilon', 1.0))
+    delta = float(config.get('delta', 1e-5))
+    max_grad_norm = float(config.get('max_grad_norm', 1.0))
+    noise_multiplier = config.get('noise_multiplier', None)
+    if noise_multiplier is not None:
+        noise_multiplier = float(noise_multiplier)
+    
     return DifferentialPrivacy(
-        epsilon=config.get('epsilon', 1.0),
-        delta=config.get('delta', 1e-5),
-        max_grad_norm=config.get('max_grad_norm', 1.0),
-        noise_multiplier=config.get('noise_multiplier', None)
+        epsilon=epsilon,
+        delta=delta,
+        max_grad_norm=max_grad_norm,
+        noise_multiplier=noise_multiplier
     )

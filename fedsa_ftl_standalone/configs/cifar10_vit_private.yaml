@@ -34,7 +34,7 @@ data:
 privacy:
   enable_privacy: true
   epsilon: 2.0  # Privacy budget (smaller = more private, typical range: 0.1-10)
-  delta: 1e-5  # Privacy parameter for (ε,δ)-DP
+  delta: 0.00001  # Privacy parameter for (ε,δ)-DP (avoid scientific notation in YAML)
   max_grad_norm: 1.0  # Maximum L2 norm for gradient clipping
   noise_multiplier: null  # Auto-computed from epsilon if null
   secure_aggregation: false  # Enable secure aggregation (additional overhead)
