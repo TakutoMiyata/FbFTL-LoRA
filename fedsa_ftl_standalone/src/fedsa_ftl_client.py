@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 import copy
 from typing import Dict, Optional
 from tqdm import tqdm
+from .privacy_utils import DifferentialPrivacy
 
 
 class FedSAFTLClient:
@@ -17,7 +18,8 @@ class FedSAFTLClient:
     FedSA-FTL Client for local training
     """
     
-    def __init__(self, client_id: int, model: nn.Module, device: torch.device = None):
+    def __init__(self, client_id: int, model: nn.Module, device: torch.device = None,
+                 privacy_mechanism: Optional[DifferentialPrivacy] = None):
         """
         Initialize FedSA-FTL client
         
@@ -25,6 +27,7 @@ class FedSAFTLClient:
             client_id: Unique client identifier
             model: FedSAFTLModel instance
             device: Device to run training on
+            privacy_mechanism: Optional differential privacy mechanism
         """
         self.client_id = client_id
         self.model = model
@@ -33,6 +36,9 @@ class FedSAFTLClient:
         
         # Store initial B matrices for personalization
         self.personalized_B_matrices = None
+        
+        # Privacy mechanism
+        self.privacy_mechanism = privacy_mechanism
         
     def train(self, dataloader: DataLoader, config: Dict) -> Dict:
         """
@@ -101,6 +107,17 @@ class FedSAFTLClient:
         
         # Get LoRA parameters to send to server (only A matrices)
         lora_A_params = self.model.get_lora_params(matrix_type='A')
+        
+        # Apply differential privacy if enabled
+        if self.privacy_mechanism is not None:
+            lora_A_params = self.privacy_mechanism.apply_differential_privacy(
+                lora_A_params, 
+                len(dataloader.dataset)
+            )
+            
+            # Log privacy budget
+            epsilon_spent, delta = self.privacy_mechanism.get_privacy_spent()
+            print(f"    Privacy budget spent: ε={epsilon_spent:.2f}, δ={delta:.2e}")
         
         # Store B matrices locally for personalization
         self.personalized_B_matrices = self.model.get_lora_params(matrix_type='B')

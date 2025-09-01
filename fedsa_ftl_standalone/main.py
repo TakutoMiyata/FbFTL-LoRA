@@ -16,6 +16,7 @@ from src.fedsa_ftl_model import create_model
 from src.fedsa_ftl_client import FedSAFTLClient
 from src.fedsa_ftl_server import FedSAFTLServer
 from src.data_utils import prepare_federated_data, get_client_dataloader
+from src.privacy_utils import create_privacy_mechanism, SecureAggregation
 from torch.utils.data import DataLoader
 
 
@@ -59,13 +60,28 @@ def main(config):
         num_workers=config['data'].get('num_workers', 2)
     )
     
+    # Initialize privacy mechanisms if enabled
+    privacy_config = config.get('privacy', {})
+    privacy_mechanism = None
+    secure_aggregator = None
+    
+    if privacy_config.get('enable_privacy', False):
+        print("\nInitializing privacy mechanisms...")
+        privacy_mechanism = create_privacy_mechanism(privacy_config)
+        print(f"  Differential Privacy: ε={privacy_config.get('epsilon', 1.0)}, δ={privacy_config.get('delta', 1e-5)}")
+        print(f"  Gradient clipping: max_norm={privacy_config.get('max_grad_norm', 1.0)}")
+        
+        if privacy_config.get('secure_aggregation', False):
+            secure_aggregator = SecureAggregation(config['federated']['num_clients'])
+            print(f"  Secure Aggregation: Enabled")
+    
     # Initialize server (no model needed, only manages A matrices)
     print("\nInitializing server...")
     server = FedSAFTLServer(device)
     
     # Get model size statistics from a temporary model
     temp_model = create_model(config['model'])
-    temp_client = FedSAFTLClient(0, temp_model, device)
+    temp_client = FedSAFTLClient(0, temp_model, device, privacy_mechanism)
     model_stats = temp_client.get_model_size()
     print("\nModel Statistics:")
     print(f"  Total parameters: {model_stats['total_params']:,}")
@@ -80,7 +96,9 @@ def main(config):
     clients = []
     for client_id in range(config['federated']['num_clients']):
         client_model = create_model(config['model'])
-        client = FedSAFTLClient(client_id, client_model, device)
+        # Each client gets its own privacy mechanism instance
+        client_privacy = create_privacy_mechanism(privacy_config) if privacy_config.get('enable_privacy', False) else None
+        client = FedSAFTLClient(client_id, client_model, device, client_privacy)
         clients.append(client)
     
     # Training loop
@@ -195,6 +213,17 @@ def main(config):
     summary = server.get_summary_stats()
     summary['final_avg_accuracy'] = avg_final_accuracy
     summary['final_std_accuracy'] = std_final_accuracy
+    
+    # Add privacy information to summary if enabled
+    if privacy_config.get('enable_privacy', False) and clients[0].privacy_mechanism:
+        total_epsilon, delta = clients[0].privacy_mechanism.get_privacy_spent()
+        summary['privacy'] = {
+            'total_epsilon_spent': total_epsilon,
+            'delta': delta,
+            'privacy_enabled': True
+        }
+    else:
+        summary['privacy'] = {'privacy_enabled': False}
     
     print("\n" + "=" * 80)
     print("Training Complete!")
