@@ -83,6 +83,13 @@ class FedSAFTLClient:
                     # Backward pass
                     optimizer.zero_grad()
                     loss.backward()
+                    
+                    # Gradient clipping for stability (especially important for 100 classes)
+                    torch.nn.utils.clip_grad_norm_(
+                        [p for p in self.model.parameters() if p.requires_grad], 
+                        max_norm=1.0
+                    )
+                    
                     optimizer.step()
                     
                     # Update metrics

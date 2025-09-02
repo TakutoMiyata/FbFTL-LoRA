@@ -44,5 +44,5 @@ federated:
 # Training configuration
 training:
   local_epochs: 5
-  learning_rate: 0.1  # High learning rate with SGD (proven configuration)
+  learning_rate: 0.01  # Lower learning rate for 100 classes stability
   weight_decay: 0.0005  # Moderate regularization

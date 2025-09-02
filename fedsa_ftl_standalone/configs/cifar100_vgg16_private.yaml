@@ -34,7 +34,7 @@ data:
 
 # Privacy configuration
 privacy:
-  enable_privacy: true
+  enable_privacy: false  # Disabled for debugging NaN issue
   epsilon: 2.0  # Privacy budget (smaller = more private, typical range: 0.1-10)
   delta: 0.00001  # Privacy parameter for (ε,δ)-DP (avoid scientific notation in YAML)
   max_grad_norm: 1.0  # Maximum L2 norm for gradient clipping
@@ -53,5 +53,5 @@ federated:
 # Training configuration
 training:
   local_epochs: 5  # Same as CIFAR-10 (proven to work)
-  learning_rate: 0.1  # High learning rate with SGD (proven configuration)
+  learning_rate: 0.01  # Lower learning rate for 100 classes stability
   weight_decay: 0.0005  # Moderate regularization

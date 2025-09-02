@@ -184,8 +184,10 @@ class LoRALinear(nn.Module):
         self.dropout = nn.Dropout(lora_dropout)
         
         # Initialize LoRA parameters
-        # Use smaller initialization for better stability
-        nn.init.normal_(self.lora_A, mean=0.0, std=0.02)
+        # Use smaller initialization for better stability, especially for many classes
+        # Scale initialization based on output dimension
+        std = 0.01 / math.sqrt(max(out_features, in_features))
+        nn.init.normal_(self.lora_A, mean=0.0, std=std)
         nn.init.zeros_(self.lora_B)  # Start with zero adaptation
     
     def forward(self, x):
