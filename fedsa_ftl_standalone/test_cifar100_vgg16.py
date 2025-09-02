@@ -61,9 +61,19 @@ def run_minimal_test():
         },
         'training': {
             'local_epochs': 2,  # Fewer epochs for testing
-            'learning_rate': 0.1,  # Same as CIFAR-10
+            'learning_rate': 0.01,  # Lower learning rate for CIFAR-100 stability
             'weight_decay': 0.0005
         }
+    }
+    
+    # Enable differential privacy for testing the new approach
+    config['privacy'] = {
+        'enable_privacy': True,
+        'epsilon': 10.0,  # Higher epsilon for testing
+        'delta': 1e-5,
+        'max_grad_norm': 0.5,
+        'noise_multiplier': None,
+        'secure_aggregation': False
     }
     
     # Set seed

@@ -115,9 +115,12 @@ class FedSAFTLClient:
         # Get LoRA parameters to send to server (only A matrices)
         lora_A_params = self.model.get_lora_params(matrix_type='A')
         
-        # Apply differential privacy if enabled
+        # Store B matrices locally for personalization  
+        self.personalized_B_matrices = self.model.get_lora_params(matrix_type='B')
+        
+        # Apply differential privacy to A matrices only when sending to server
         if self.privacy_mechanism is not None:
-            lora_A_params = self.privacy_mechanism.apply_differential_privacy(
+            lora_A_params = self.privacy_mechanism.add_noise_to_parameters(
                 lora_A_params, 
                 len(dataloader.dataset)
             )
@@ -125,9 +128,6 @@ class FedSAFTLClient:
             # Log privacy budget
             epsilon_spent, delta = self.privacy_mechanism.get_privacy_spent()
             print(f"    Privacy budget spent: ε={epsilon_spent:.2f}, δ={delta:.2e}")
-        
-        # Store B matrices locally for personalization
-        self.personalized_B_matrices = self.model.get_lora_params(matrix_type='B')
         
         return {
             'client_id': self.client_id,
