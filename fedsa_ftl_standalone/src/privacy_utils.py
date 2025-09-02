@@ -15,7 +15,8 @@ class DifferentialPrivacy:
     """
     
     def __init__(self, epsilon: float = 1.0, delta: float = 1e-5, 
-                 max_grad_norm: float = 1.0, noise_multiplier: Optional[float] = None):
+                 max_grad_norm: float = 1.0, noise_multiplier: Optional[float] = None,
+                 total_rounds: int = 100):
         """
         Initialize DP mechanism
         
@@ -24,16 +25,21 @@ class DifferentialPrivacy:
             delta: Privacy parameter for (ε,δ)-differential privacy
             max_grad_norm: Maximum L2 norm for gradient clipping
             noise_multiplier: Noise scale (if None, computed from epsilon)
+            total_rounds: Total number of rounds for budget allocation
         """
         self.epsilon = float(epsilon)  # Ensure float type
         self.delta = float(delta)  # Ensure float type
         self.max_grad_norm = float(max_grad_norm)  # Ensure float type
+        self.total_rounds = total_rounds
         
-        # Compute noise multiplier from privacy budget if not provided
+        # Compute per-round epsilon budget
+        self.epsilon_per_round = self.epsilon / self.total_rounds
+        
+        # Compute noise multiplier from per-round budget if not provided
         if noise_multiplier is None:
             # Approximation for Gaussian mechanism
-            # σ ≈ sqrt(2 * log(1.25/δ)) / ε
-            self.noise_multiplier = np.sqrt(2 * np.log(1.25 / self.delta)) / self.epsilon
+            # σ ≈ sqrt(2 * log(1.25/δ)) / ε_per_round
+            self.noise_multiplier = np.sqrt(2 * np.log(1.25 / self.delta)) / self.epsilon_per_round
         else:
             self.noise_multiplier = float(noise_multiplier)
         
@@ -116,10 +122,10 @@ class DifferentialPrivacy:
         return private_params
     
     def _update_privacy_budget(self):
-        """Update consumed privacy budget using composition theorem"""
-        # Using advanced composition for multiple steps
-        # ε_total ≈ ε_step * sqrt(2 * steps * log(1/δ))
-        self.consumed_epsilon = self.epsilon * np.sqrt(2 * self.steps * np.log(1 / self.delta))
+        """Update consumed privacy budget for communication-only DP"""
+        # For communication-only DP: simple composition
+        # Each round uses epsilon_per_round budget
+        self.consumed_epsilon = self.steps * self.epsilon_per_round
     
     def get_privacy_spent(self) -> Tuple[float, float]:
         """
@@ -277,9 +283,13 @@ def create_privacy_mechanism(config: Dict) -> Optional[DifferentialPrivacy]:
     if noise_multiplier is not None:
         noise_multiplier = float(noise_multiplier)
     
+    # Get total rounds from config for proper budget allocation
+    total_rounds = config.get('total_rounds', 100)
+    
     return DifferentialPrivacy(
         epsilon=epsilon,
         delta=delta,
         max_grad_norm=max_grad_norm,
-        noise_multiplier=noise_multiplier
+        noise_multiplier=noise_multiplier,
+        total_rounds=total_rounds
     )

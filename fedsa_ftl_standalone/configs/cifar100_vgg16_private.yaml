@@ -40,6 +40,7 @@ privacy:
   max_grad_norm: 0.5  # Smaller norm for stability with 100 classes
   noise_multiplier: null  # Auto-computed from epsilon if null
   secure_aggregation: false  # Enable secure aggregation (additional overhead)
+  total_rounds: 100  # Total rounds for budget allocation
 
 # Federated learning configuration
 federated:
