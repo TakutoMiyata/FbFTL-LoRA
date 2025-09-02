@@ -17,9 +17,9 @@ experiment:
 model:
   num_classes: 100
   model_name: "vgg16"  # Use VGG-16 backbone like FbFTL paper
-  lora_r: 8
-  lora_alpha: 16
-  lora_dropout: 0.1
+  lora_r: 32  # Higher rank for 100 classes (more complexity needed)
+  lora_alpha: 64  # Increased scaling for better learning
+  lora_dropout: 0.05  # Reduced dropout for better learning
   freeze_backbone: true
 
 # Data configuration
@@ -52,6 +52,6 @@ federated:
 
 # Training configuration
 training:
-  local_epochs: 5
-  learning_rate: 0.001  # Avoid scientific notation
+  local_epochs: 8  # More epochs for 100 classes
+  learning_rate: 0.005  # Higher learning rate for complex task
   weight_decay: 0.0001  # Avoid scientific notation

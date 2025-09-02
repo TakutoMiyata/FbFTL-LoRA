@@ -8,17 +8,17 @@ use_gpu: true
 
 # Experiment settings
 experiment:
-  name: fedsa_ftl_cifar10_vit
-  description: "FedSA-FTL with frozen ViT backbone and LoRA head on CIFAR-10"
-  output_dir: experiments/fedsa_ftl_cifar10_vit
+  name: fedsa_ftl_cifar10_vgg16
+  description: "FedSA-FTL with frozen VGG16 backbone and LoRA head on CIFAR-10"
+  output_dir: experiments/fedsa_ftl_cifar10_vgg16
 
 # Model configuration
 model:
   num_classes: 10
-  model_name: "google/vit-base-patch16-224-in21k"  # Pre-trained ViT model
-  lora_r: 8  # LoRA rank
-  lora_alpha: 16  # LoRA scaling factor
-  lora_dropout: 0.1  # LoRA dropout
+  model_name: "vgg16"  # Pre-trained VGG16 model (FbFTL approach)
+  lora_r: 16  # LoRA rank (increased for better capacity)
+  lora_alpha: 32  # LoRA scaling factor
+  lora_dropout: 0.05  # LoRA dropout (reduced for better learning)
   freeze_backbone: true  # Freeze backbone (FbFTL approach)
 
 # Data configuration
@@ -42,5 +42,5 @@ federated:
 # Training configuration
 training:
   local_epochs: 5
-  learning_rate: 0.001  # 1e-3
+  learning_rate: 0.01  # Higher learning rate for VGG16 LoRA
   weight_decay: 0.0001  # 1e-4

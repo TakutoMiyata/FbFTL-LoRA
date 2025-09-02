@@ -1,61 +1,31 @@
 """
 FedSA-FTL Model Implementation
-Combines frozen backbone from FbFTL with LoRA adaptation for the head
-Uses VGG-16 backbone as in FbFTL paper
+VGG16 backbone with LoRA adaptation following FbFTL paper approach
 """
 
 import torch
 import torch.nn as nn
-import torchvision.models as models
 import torch.nn.functional as F
+import torchvision.models as models
 import copy
 import math
 
 
 class FedSAFTLModel(nn.Module):
     """
-    FedSA-FTL Model with frozen VGG-16 backbone and LoRA-adapted head
-    Following FbFTL paper approach with ImageNet pre-trained VGG-16
+    FedSA-FTL Model with frozen VGG16 backbone and LoRA-adapted head
+    Following FbFTL paper approach with ImageNet pre-trained VGG16
     """
     
-    def __init__(self, num_classes=100, model_name='vgg16', 
+    def __init__(self, num_classes=10, model_name='vgg16', 
                  lora_r=8, lora_alpha=16, lora_dropout=0.1, freeze_backbone=True):
         super().__init__()
         
-        # Load pre-trained VGG-16 model (ImageNet pre-trained like FbFTL paper)
-        print(f"Loading pre-trained VGG-16 model from ImageNet")
-        if model_name == 'vgg16':
-            self.backbone = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
-        elif model_name == 'vgg16_bn':
-            self.backbone = models.vgg16_bn(weights=models.VGG16_BN_Weights.IMAGENET1K_V1)
-        else:
-            raise ValueError(f"Unsupported model: {model_name}. Use 'vgg16' or 'vgg16_bn'")
+        self.model_name = model_name
+        self.freeze_backbone = freeze_backbone
         
-        # Get feature dimension (VGG-16 classifier input: 25088)
-        feature_dim = self.backbone.classifier[0].in_features  # 512 * 7 * 7 = 25088
-        
-        # Remove the original classifier
-        self.backbone.classifier = nn.Identity()
-        
-        # Freeze backbone if specified
-        if freeze_backbone:
-            print("Freezing backbone parameters...")
-            for param in self.backbone.parameters():
-                param.requires_grad = False
-        
-        # Add adaptive average pooling to handle different input sizes
-        self.adaptive_pool = nn.AdaptiveAvgPool2d((7, 7))
-        
-        # Classification head with similar structure to original VGG classifier
-        self.classifier = nn.Sequential(
-            nn.Linear(feature_dim, 4096),
-            nn.ReLU(True),
-            nn.Dropout(0.5),
-            nn.Linear(4096, 4096),
-            nn.ReLU(True),
-            nn.Dropout(0.5),
-            nn.Linear(4096, num_classes)
-        )
+        # Initialize VGG16 backbone
+        self._init_vgg_backbone(model_name, num_classes)
         
         # Store LoRA configuration
         self.lora_config = {
@@ -70,32 +40,69 @@ class FedSAFTLModel(nn.Module):
         # Apply LoRA to classifier layers
         self._apply_lora_to_classifier()
     
+    
+    def _init_vgg_backbone(self, model_name, num_classes):
+        """Initialize VGG backbone"""
+        print(f"Loading pre-trained VGG model: {model_name}")
+        
+        # Load pre-trained VGG
+        if model_name == 'vgg16':
+            self.backbone = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
+        elif model_name == 'vgg16_bn':
+            self.backbone = models.vgg16_bn(weights=models.VGG16_BN_Weights.IMAGENET1K_V1)
+        else:
+            raise ValueError(f"Unsupported VGG variant: {model_name}")
+        
+        # Get feature dimension and remove original classifier
+        feature_dim = self.backbone.classifier[0].in_features  # 25088
+        self.backbone.classifier = nn.Identity()
+        
+        # Add adaptive pooling to handle CIFAR-10 32x32 input
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((7, 7))
+        
+        # Create classification head similar to original VGG but adapted for target dataset
+        self.classifier = nn.Sequential(
+            nn.Linear(feature_dim, 4096),
+            nn.ReLU(True),
+            nn.Dropout(0.5),
+            nn.Linear(4096, 4096),
+            nn.ReLU(True), 
+            nn.Dropout(0.5),
+            nn.Linear(4096, num_classes)
+        )
+        
+        # Freeze backbone if specified (following FbFTL approach)
+        if self.freeze_backbone:
+            print("Freezing VGG backbone parameters...")
+            for param in self.backbone.features.parameters():
+                param.requires_grad = False
+    
     def _apply_lora_to_classifier(self):
         """Apply LoRA decomposition to linear layers in classifier"""
         for i, module in enumerate(self.classifier):
             if isinstance(module, nn.Linear):
+                # Get original weights
+                original_weight = module.weight.data.clone()
+                original_bias = module.bias.data.clone() if module.bias is not None else None
+                
                 # Replace with LoRA linear layer
                 self.classifier[i] = LoRALinear(
                     module.in_features,
                     module.out_features,
                     r=self.lora_config['r'],
                     lora_alpha=self.lora_config['alpha'],
-                    lora_dropout=self.lora_config['dropout']
+                    lora_dropout=self.lora_config['dropout'],
+                    original_weight=original_weight,
+                    original_bias=original_bias
                 )
     
     def forward(self, x):
-        # Extract features with frozen VGG-16 backbone
-        features = self.backbone.features(x)
-        
-        # Adaptive pooling to ensure consistent feature map size
-        features = self.adaptive_pool(features)
-        
-        # Flatten features
-        features = torch.flatten(features, 1)
-        
-        # Detach to ensure no gradients flow back to frozen backbone if frozen
-        if not self.backbone.training:
-            features = features.detach()
+        """Forward pass for VGG16"""
+        # Extract features with frozen VGG backbone
+        with torch.set_grad_enabled(not self.freeze_backbone):
+            features = self.backbone.features(x)
+            features = self.adaptive_pool(features)
+            features = torch.flatten(features, 1)
         
         # Pass through LoRA-adapted classifier
         logits = self.classifier(features)
@@ -139,7 +146,8 @@ class LoRALinear(nn.Module):
     W = W0 + BA where W0 is frozen, B and A are low-rank matrices
     """
     
-    def __init__(self, in_features, out_features, r=8, lora_alpha=16, lora_dropout=0.1):
+    def __init__(self, in_features, out_features, r=8, lora_alpha=16, lora_dropout=0.1,
+                 original_weight=None, original_bias=None):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -147,43 +155,53 @@ class LoRALinear(nn.Module):
         self.lora_alpha = lora_alpha
         self.scaling = lora_alpha / r
         
-        # Frozen pre-trained weights (initialized with standard Linear initialization)
-        self.weight = nn.Parameter(torch.randn(out_features, in_features) * 0.02)
-        self.bias = nn.Parameter(torch.zeros(out_features))
+        # Frozen pre-trained weights
+        if original_weight is not None:
+            self.weight = nn.Parameter(original_weight.clone())
+        else:
+            # Fallback to random initialization if no pre-trained weights available
+            self.weight = nn.Parameter(torch.randn(out_features, in_features) * 0.02)
+        
+        if original_bias is not None:
+            self.bias = nn.Parameter(original_bias.clone())
+        else:
+            self.bias = nn.Parameter(torch.zeros(out_features))
+        
+        # Freeze original parameters
         self.weight.requires_grad = False
         self.bias.requires_grad = False
         
         # LoRA matrices
-        self.lora_A = nn.Parameter(torch.randn(r, in_features) * 0.02)
+        self.lora_A = nn.Parameter(torch.randn(r, in_features))
         self.lora_B = nn.Parameter(torch.zeros(out_features, r))
         
         # Dropout
         self.dropout = nn.Dropout(lora_dropout)
         
-        # Initialize B to zero for zero initialization of BA
-        nn.init.zeros_(self.lora_B)
+        # Initialize LoRA parameters
         nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
+        nn.init.zeros_(self.lora_B)
     
     def forward(self, x):
         # Regular linear transformation with frozen weights
         result = F.linear(x, self.weight, self.bias)
         
-        # Add LoRA adaptation
-        x_dropout = self.dropout(x)
-        lora_output = x_dropout @ self.lora_A.T @ self.lora_B.T * self.scaling
+        # Add LoRA adaptation: x @ A^T @ B^T
+        if self.r > 0:
+            x_dropout = self.dropout(x)
+            lora_output = (x_dropout @ self.lora_A.T) @ self.lora_B.T * self.scaling
+            result = result + lora_output
         
-        return result + lora_output
+        return result
     
     def extra_repr(self):
         return f'in_features={self.in_features}, out_features={self.out_features}, r={self.r}'
 
 
-import torch.nn.functional as F
-
 def create_model(config):
-    """Factory function to create FedSA-FTL model with VGG-16 backbone"""
+    """Factory function to create FedSA-FTL model with VGG16 backbone"""
     return FedSAFTLModel(
-        num_classes=config.get('num_classes', 100),
+        num_classes=config.get('num_classes', 10),
         model_name=config.get('model_name', 'vgg16'),
         lora_r=config.get('lora_r', 8),
         lora_alpha=config.get('lora_alpha', 16),
