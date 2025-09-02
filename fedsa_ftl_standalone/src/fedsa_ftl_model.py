@@ -100,10 +100,14 @@ class FedSAFTLModel(nn.Module):
     def forward(self, x):
         """Forward pass for VGG16"""
         # Extract features with frozen VGG backbone
-        with torch.set_grad_enabled(not self.freeze_backbone):
-            features = self.backbone.features(x)
-            features = self.adaptive_pool(features)
-            features = torch.flatten(features, 1)
+        # The backbone is already frozen via requires_grad=False, so we don't need torch.set_grad_enabled
+        features = self.backbone.features(x)
+        features = self.adaptive_pool(features)
+        features = torch.flatten(features, 1)
+        
+        # Detach features to prevent gradients flowing to frozen backbone
+        if self.freeze_backbone:
+            features = features.detach()
         
         # Pass through LoRA-adapted classifier
         logits = self.classifier(features)
@@ -173,15 +177,16 @@ class LoRALinear(nn.Module):
         self.bias.requires_grad = False
         
         # LoRA matrices
-        self.lora_A = nn.Parameter(torch.randn(r, in_features))
+        self.lora_A = nn.Parameter(torch.zeros(r, in_features))
         self.lora_B = nn.Parameter(torch.zeros(out_features, r))
         
         # Dropout
         self.dropout = nn.Dropout(lora_dropout)
         
         # Initialize LoRA parameters
-        nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
-        nn.init.zeros_(self.lora_B)
+        # Use smaller initialization for better stability
+        nn.init.normal_(self.lora_A, mean=0.0, std=0.02)
+        nn.init.zeros_(self.lora_B)  # Start with zero adaptation
     
     def forward(self, x):
         # Regular linear transformation with frozen weights

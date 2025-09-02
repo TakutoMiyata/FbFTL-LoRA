@@ -196,7 +196,8 @@ class FedSAFTLClient:
             if 'lora_' in name and param.requires_grad:
                 lora_params.append(param)
         
-        return optim.AdamW(lora_params, lr=lr, weight_decay=weight_decay)
+        # Use SGD with momentum for better convergence with frozen features
+        return optim.SGD(lora_params, lr=lr, momentum=0.9, weight_decay=weight_decay)
     
     def get_model_size(self) -> Dict:
         """

@@ -43,6 +43,6 @@ federated:
 
 # Training configuration
 training:
-  local_epochs: 3  # Reduced to prevent overfitting on local data
-  learning_rate: 0.001  # Lower learning rate for stable training
-  weight_decay: 0.001  # Increased regularization
+  local_epochs: 5  # Increase back for better local learning
+  learning_rate: 0.1  # Much higher learning rate for LoRA fine-tuning
+  weight_decay: 0.0005  # Moderate regularization
