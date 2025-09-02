@@ -12,7 +12,7 @@ from datetime import datetime
 # Create a minimal configuration for very quick testing
 minimal_config = {
     'seed': 42,
-    'use_gpu': False,  # CPU for quick test
+    'use_gpu': torch.cuda.is_available(),  # Use GPU if available
     'experiment': {
         'name': 'minimal_test',
         'description': 'Minimal test of FedSA-FTL with VGG-16',
