@@ -168,14 +168,14 @@ class FedSAFTLClient:
                 outputs = self.model(images)
                 loss = criterion(outputs, labels)
                 
-                test_loss += loss.item()
+                test_loss += loss.item() * labels.size(0)  # Weight by batch size
                 _, predicted = outputs.max(1)
                 test_total += labels.size(0)
                 test_correct += predicted.eq(labels).sum().item()
         
         return {
             'client_id': self.client_id,
-            'loss': test_loss / len(dataloader),
+            'loss': test_loss / test_total,  # Average over samples, not batches
             'accuracy': 100. * test_correct / test_total,
             'num_samples': test_total
         }

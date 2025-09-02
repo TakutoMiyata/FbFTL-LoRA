@@ -60,15 +60,16 @@ class FedSAFTLModel(nn.Module):
         # Add adaptive pooling to handle CIFAR-10 32x32 input
         self.adaptive_pool = nn.AdaptiveAvgPool2d((7, 7))
         
-        # Create classification head similar to original VGG but adapted for target dataset
+        # Create classification head with reduced capacity for CIFAR
+        # Original VGG classifier is too large for CIFAR datasets
         self.classifier = nn.Sequential(
-            nn.Linear(feature_dim, 4096),
+            nn.Linear(feature_dim, 512),  # Reduced from 4096
             nn.ReLU(True),
-            nn.Dropout(0.5),
-            nn.Linear(4096, 4096),
+            nn.Dropout(0.2),  # Reduced dropout
+            nn.Linear(512, 512),  # Reduced from 4096
             nn.ReLU(True), 
-            nn.Dropout(0.5),
-            nn.Linear(4096, num_classes)
+            nn.Dropout(0.2),  # Reduced dropout
+            nn.Linear(512, num_classes)
         )
         
         # Freeze backbone if specified (following FbFTL approach)
