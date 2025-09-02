@@ -34,10 +34,10 @@ data:
 
 # Privacy configuration
 privacy:
-  enable_privacy: false  # Disabled for debugging NaN issue
-  epsilon: 2.0  # Privacy budget (smaller = more private, typical range: 0.1-10)
-  delta: 0.00001  # Privacy parameter for (ε,δ)-DP (avoid scientific notation in YAML)
-  max_grad_norm: 1.0  # Maximum L2 norm for gradient clipping
+  enable_privacy: true  # Enable differential privacy
+  epsilon: 10.0  # Higher epsilon for CIFAR-100 (less noise, more utility)
+  delta: 0.00001  # Privacy parameter for (ε,δ)-DP
+  max_grad_norm: 0.5  # Smaller norm for stability with 100 classes
   noise_multiplier: null  # Auto-computed from epsilon if null
   secure_aggregation: false  # Enable secure aggregation (additional overhead)
 
