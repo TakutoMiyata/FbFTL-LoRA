@@ -140,6 +140,8 @@ class FedSAFTLClient:
     def _train_with_dp(self, dataloader: DataLoader, config: Dict, num_epochs: int) -> Dict:
         """Training with differential privacy using Opacus"""
         print(f"    Training with differential privacy (Opacus)")
+
+        self.model.train()
         
         # Enable Opacus mode for ViT models to handle dropout compatibility
         if hasattr(self.model, 'set_opacus_mode'):
