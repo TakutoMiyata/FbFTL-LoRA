@@ -132,8 +132,10 @@ class DifferentialPrivacy:
                 # Process each sample individually for true per-sample gradient clipping
                 for i in range(len(images)):
                     # Single sample
-                    single_image = images[i:i+1].to(model.device if hasattr(model, 'device') else images.device)
-                    single_label = labels[i:i+1].to(model.device if hasattr(model, 'device') else labels.device)
+                    # Get device from model parameters
+                    device = next(model.parameters()).device
+                    single_image = images[i:i+1].to(device)
+                    single_label = labels[i:i+1].to(device)
                     
                     # Forward pass
                     outputs = model(single_image)
