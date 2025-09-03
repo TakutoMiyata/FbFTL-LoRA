@@ -223,25 +223,9 @@ def show_vit_model_info():
     
     # ViT configurations for different sizes
     vit_configs = {
-        'vit_tiny': {
-            'num_classes': 100,
-            'model_name': 'vit_tiny',
-            'lora_r': 16,
-            'lora_alpha': 16,
-            'lora_dropout': 0.1,
-            'freeze_backbone': True
-        },
         'vit_small': {
             'num_classes': 100,
             'model_name': 'vit_small',
-            'lora_r': 16,
-            'lora_alpha': 16,
-            'lora_dropout': 0.1,
-            'freeze_backbone': True
-        },
-        'vit_base': {
-            'num_classes': 100,
-            'model_name': 'vit_base',
             'lora_r': 16,
             'lora_alpha': 16,
             'lora_dropout': 0.1,

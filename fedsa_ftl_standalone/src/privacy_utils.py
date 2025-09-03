@@ -117,64 +117,68 @@ class DifferentialPrivacy:
         Returns:
             Accumulated clipped gradient updates for LoRA A matrices
         """
+        # Get device from model parameters (assume all params on same device)
+        device = next(model.parameters()).device
+
         accumulated_updates = {}
-        criterion = torch.nn.CrossEntropyLoss()
+        criterion = torch.nn.CrossEntropyLoss().to(device)
         sample_count = 0
-        
-        # Initialize accumulated updates
+
+        # Initialize accumulated updates on the same device as model
         for name, param in model.named_parameters():
             if 'lora_A' in name and param.requires_grad:
-                accumulated_updates[name] = torch.zeros_like(param)
-        
+                accumulated_updates[name] = torch.zeros_like(param, device=device)
+
         model.train()
         for epoch in range(local_epochs):
             for batch_idx, (images, labels) in enumerate(dataloader):
+                # Move batch to device (if not already)
+                images = images.to(device)
+                labels = labels.to(device)
                 # Process each sample individually for true per-sample gradient clipping
                 for i in range(len(images)):
                     # Single sample
-                    # Get device from model parameters
-                    device = next(model.parameters()).device
-                    single_image = images[i:i+1].to(device)
-                    single_label = labels[i:i+1].to(device)
-                    
+                    single_image = images[i:i+1]
+                    single_label = labels[i:i+1]
+
                     # Forward pass
                     outputs = model(single_image)
                     loss = criterion(outputs, single_label)
-                    
+
                     # Backward pass
                     loss.backward()
-                    
+
                     # Collect gradients for LoRA A matrices
                     sample_grads = {}
                     total_norm_squared = 0.0
-                    
+
                     # First pass: collect gradients and compute total norm
                     for name, param in model.named_parameters():
                         if 'lora_A' in name and param.requires_grad and param.grad is not None:
                             sample_grads[name] = param.grad.clone()
                             total_norm_squared += torch.sum(param.grad ** 2).item()
-                    
+
                     # Compute total L2 norm across all LoRA A parameters
                     total_norm = np.sqrt(total_norm_squared)
-                    
+
                     # Clip and accumulate gradients
                     clip_factor = min(1.0, self.max_grad_norm / (total_norm + 1e-8))
-                    
+
                     for name, grad in sample_grads.items():
                         # Apply clipping factor
                         clipped_grad = grad * clip_factor
                         # Accumulate clipped gradient
                         accumulated_updates[name] += clipped_grad
-                    
+
                     sample_count += 1
-                    
+
                     # Clear gradients for next sample
                     model.zero_grad()
-        
+
         # Average the accumulated gradients by sample count
         for name in accumulated_updates:
             accumulated_updates[name] = accumulated_updates[name] / sample_count
-        
+
         # Return both the averaged updates and the sample count for correct noise scaling
         return accumulated_updates, sample_count
     
