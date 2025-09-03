@@ -207,6 +207,7 @@ class FedSAFTLModelViT(nn.Module):
         self.model_name = model_name
         self.freeze_backbone = freeze_backbone
         self.num_classes = num_classes
+        self.opacus_mode = False  # Flag for Opacus compatibility
         
         # Store LoRA configuration
         self.lora_config = {
@@ -327,6 +328,30 @@ class FedSAFTLModelViT(nn.Module):
             original_bias=original_head.bias.data.clone() if original_head.bias is not None else None
         )
     
+    def set_opacus_mode(self, enabled=True):
+        """
+        Enable/disable Opacus mode to handle dropout compatibility
+        When enabled, replaces all dropout layers with Identity (no-op)
+        """
+        self.opacus_mode = enabled
+        
+        if enabled:
+            # Replace all dropout layers with Identity for Opacus compatibility
+            for module in self.modules():
+                if isinstance(module, nn.Dropout):
+                    # Store original dropout rate for potential restoration
+                    if not hasattr(module, '_original_p'):
+                        module._original_p = module.p
+                    module.p = 0.0  # Disable dropout
+                    module.eval()  # Set to eval mode to disable dropout
+        else:
+            # Restore original dropout behavior
+            for module in self.modules():
+                if isinstance(module, nn.Dropout):
+                    if hasattr(module, '_original_p'):
+                        module.p = module._original_p
+                        module.train()  # Restore training mode
+    
     def forward(self, x):
         """Forward pass for ViT"""
         return self.backbone(x)
@@ -411,7 +436,22 @@ class LoRALinear(nn.Module):
         
         # Add LoRA adaptation
         if self.r > 0:
-            x_dropout = self.dropout(x)
+            # Skip dropout if dropout module is in eval mode (Opacus compatibility)
+            if hasattr(self, 'dropout') and isinstance(self.dropout, nn.Dropout):
+                if self.dropout.training and self.dropout.p > 0:
+                    try:
+                        x_dropout = self.dropout(x)
+                    except RuntimeError as e:
+                        if "vmap" in str(e) or "randomness" in str(e):
+                            # If in vmap context (Opacus), skip dropout
+                            x_dropout = x
+                        else:
+                            raise e
+                else:
+                    x_dropout = x
+            else:
+                x_dropout = x
+            
             lora_output = (x_dropout @ self.lora_A.T) @ self.lora_B.T * self.scaling
             result = result + lora_output
         

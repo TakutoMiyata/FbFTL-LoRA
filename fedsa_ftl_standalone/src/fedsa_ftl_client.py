@@ -143,6 +143,11 @@ class FedSAFTLClient:
         # Check if Opacus is available and should be used
         if hasattr(self.privacy_mechanism, 'use_opacus') and self.privacy_mechanism.use_opacus:
             print(f"    Training with differential privacy (Opacus - efficient)")
+            
+            # Enable Opacus mode for ViT models to handle dropout compatibility
+            if hasattr(self.model, 'set_opacus_mode'):
+                self.model.set_opacus_mode(True)
+            
             # Use Opacus for efficient DP-SGD
             lr = float(config.get('learning_rate', 1e-3))
             weight_decay = float(config.get('weight_decay', 1e-4))
@@ -154,6 +159,10 @@ class FedSAFTLClient:
             accumulated_updates, sample_count = self.privacy_mechanism.train_with_opacus(
                 self.model, dataloader, optimizer, num_epochs
             )
+            
+            # Disable Opacus mode after training
+            if hasattr(self.model, 'set_opacus_mode'):
+                self.model.set_opacus_mode(False)
         else:
             print(f"    Training with differential privacy (manual per-sample clipping)")
             # Get learning rate from config
