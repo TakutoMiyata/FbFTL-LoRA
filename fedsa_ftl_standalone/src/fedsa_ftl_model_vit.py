@@ -78,13 +78,22 @@ class VisionTransformer(nn.Module):
         nn.init.zeros_(self.head.bias)
     
     def forward(self, x):
-        B = x.shape[0]
+        B, C, H, W = x.shape
         
-        # Patch embedding: (B, 3, 32, 32) -> (B, 384, 8, 8) -> (B, 64, 384)
+        # Check input dimensions
+        assert H == self.img_size and W == self.img_size, \
+            f"Input image size mismatch: got ({H}, {W}), expected ({self.img_size}, {self.img_size})"
+        
+        # Patch embedding: (B, 3, 32, 32) -> (B, embed_dim, H/P, W/P) -> (B, num_patches, embed_dim)
         x = self.patch_embed(x)
+        # Ensure correct reshape: the Conv2d outputs (B, embed_dim, H/P, W/P)
+        # We need to reshape to (B, num_patches, embed_dim)
         x = x.flatten(2).transpose(1, 2)
         
-        # Add class token: (B, 64, 384) -> (B, 65, 384)
+        # Verify patch count
+        assert x.shape[1] == self.num_patches, f"Patch count mismatch: got {x.shape[1]}, expected {self.num_patches}"
+        
+        # Add class token: (B, num_patches, embed_dim) -> (B, num_patches+1, embed_dim)
         cls_token = self.cls_token.expand(B, -1, -1)
         x = torch.cat([cls_token, x], dim=1)
         
