@@ -138,55 +138,28 @@ class FedSAFTLClient:
         }
     
     def _train_with_dp(self, dataloader: DataLoader, config: Dict, num_epochs: int) -> Dict:
-        """Training with differential privacy using per-sample gradient clipping"""
+        """Training with differential privacy using Opacus"""
+        print(f"    Training with differential privacy (Opacus)")
         
-        # Check if Opacus is available and should be used
-        if hasattr(self.privacy_mechanism, 'use_opacus') and self.privacy_mechanism.use_opacus:
-            print(f"    Training with differential privacy (Opacus - efficient)")
-            
-            # Enable Opacus mode for ViT models to handle dropout compatibility
-            if hasattr(self.model, 'set_opacus_mode'):
-                self.model.set_opacus_mode(True)
-            
-            # Use Opacus for efficient DP-SGD
-            lr = float(config.get('learning_rate', 1e-3))
-            weight_decay = float(config.get('weight_decay', 1e-4))
-            
-            # Create optimizer for Opacus
-            optimizer = self._get_optimizer(config, lr, weight_decay)
-            
-            # Train with Opacus
-            accumulated_updates, sample_count = self.privacy_mechanism.train_with_opacus(
-                self.model, dataloader, optimizer, num_epochs
-            )
-            
-            # Disable Opacus mode after training
-            if hasattr(self.model, 'set_opacus_mode'):
-                self.model.set_opacus_mode(False)
-        else:
-            print(f"    Training with differential privacy (manual per-sample clipping)")
-            # Get learning rate from config
-            lr = float(config.get('learning_rate', 1e-3))
-            
-            # Store initial model state
-            initial_lora_A_params = self.model.get_lora_params(matrix_type='A')
-            
-            # Use the privacy mechanism to compute accumulated clipped gradients
-            accumulated_updates, sample_count = self.privacy_mechanism.simulate_per_sample_clipping(
-                self.model, dataloader, num_epochs
-            )
-            
-            # Add noise to accumulated updates with correct scaling for averaged gradients
-            noisy_updates = self.privacy_mechanism.add_noise_to_accumulated_updates(
-                accumulated_updates, sample_count
-            )
-            
-            # Apply the noisy updates to the model
-            current_A_params = self.model.get_lora_params(matrix_type='A')
-            for name, param in self.model.named_parameters():
-                if 'lora_A' in name and name in noisy_updates:
-                    # Apply update: param = param + learning_rate * noisy_gradient
-                    param.data += lr * noisy_updates[name]  # Use learning rate from config
+        # Enable Opacus mode for ViT models to handle dropout compatibility
+        if hasattr(self.model, 'set_opacus_mode'):
+            self.model.set_opacus_mode(True)
+        
+        # Use Opacus for efficient DP-SGD
+        lr = float(config.get('learning_rate', 1e-3))
+        weight_decay = float(config.get('weight_decay', 1e-4))
+        
+        # Create optimizer for Opacus
+        optimizer = self._get_optimizer(config, lr, weight_decay)
+        
+        # Train with Opacus - model is updated in-place
+        lora_A_params, sample_count = self.privacy_mechanism.train_with_opacus(
+            self.model, dataloader, optimizer, num_epochs
+        )
+        
+        # Disable Opacus mode after training
+        if hasattr(self.model, 'set_opacus_mode'):
+            self.model.set_opacus_mode(False)
         
         # Calculate training metrics (approximate, since we didn't do normal forward passes)
         self.model.eval()
@@ -209,8 +182,8 @@ class FedSAFTLClient:
         avg_loss = total_loss / total_samples
         avg_accuracy = 100. * total_correct / total_samples
         
-        # Get updated LoRA A parameters
-        lora_A_params = self.model.get_lora_params(matrix_type='A')
+        # Get updated LoRA A parameters (already extracted by Opacus training)
+        # lora_A_params was returned from train_with_opacus
         
         # Store the NEWLY TRAINED B matrices for personalization in the next round
         self.personalized_B_matrices = self.model.get_lora_params(matrix_type='B')
