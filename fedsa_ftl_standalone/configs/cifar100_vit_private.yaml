@@ -1,0 +1,126 @@
+# FedSA-FTL Configuration for CIFAR-100 with Vision Transformer (ViT) + Differential Privacy
+# Following FbFTL paper approach with frozen ViT backbone, LoRA adaptation, and privacy protection
+
+# Random seed for reproducibility
+seed: 42
+
+# Use GPU if available
+use_gpu: true
+
+# Experiment settings
+experiment:
+  name: fedsa_ftl_cifar100_vit_private
+  description: "FedSA-FTL with frozen ViT backbone, LoRA adaptation, and differential privacy on CIFAR-100"
+  output_dir: experiments/fedsa_ftl_cifar100_vit_private
+
+# Model configuration
+model:
+  num_classes: 100  # CIFAR-100 has 100 classes
+  model_name: "vit_small"  # ViT Small model for CIFAR-100
+  lora_r: 16  # Moderate rank (consistent with VGG16)
+  lora_alpha: 16  # 1:1 ratio with r
+  lora_dropout: 0.1  # Standard dropout for regularization
+  freeze_backbone: true  # Freeze backbone (FbFTL approach)
+
+# Data configuration
+data:
+  dataset_name: "cifar100"  # Use CIFAR-100 dataset
+  data_dir: "./data"
+  batch_size: 32  # Smaller batch size for ViT memory efficiency
+  num_workers: 2
+  data_split: "non_iid"  # "iid" or "non_iid"
+  alpha: 0.5  # Dirichlet distribution parameter for non-IID split
+  verbose: true  # Print data distribution analysis
+
+# Federated learning configuration
+federated:
+  num_clients: 10
+  num_rounds: 150  # More rounds for ViT + privacy convergence
+  client_fraction: 0.3  # Fraction of clients selected per round
+  checkpoint_freq: 10  # Save checkpoint every N rounds
+  save_best_model: true
+  aggregation_method: "fedavg"  # "fedavg" or "equal"
+
+# Training configuration
+training:
+  local_epochs: 5
+  learning_rate: 0.001  # Lower learning rate for ViT stability with privacy
+  weight_decay: 0.0001  # Lower weight decay for ViT (typical for transformers)
+
+# Privacy configuration (ENABLED for this config)
+privacy:
+  enable_privacy: true
+  epsilon: 8.0  # Privacy budget (reasonable for utility/privacy trade-off)
+  delta: 1e-5  # Privacy parameter
+  max_grad_norm: 1.0  # Gradient clipping for differential privacy
+  noise_multiplier: null  # Auto-calculated from epsilon/delta
+  secure_aggregation: false  # Enable secure aggregation
+  
+  # Privacy accounting
+  accounting_mode: "rdp"  # "rdp" or "gdp"
+  
+  # Clipping strategy
+  clipping_mode: "flat"  # "flat" or "per_layer"
+  
+  # Privacy analysis
+  target_epsilon: 8.0  # Target epsilon for analysis
+  target_delta: 1e-5   # Target delta for analysis
+
+# Logging and monitoring
+logging:
+  log_level: "INFO"  # "DEBUG", "INFO", "WARNING", "ERROR"
+  save_logs: true
+  tensorboard: false  # Enable TensorBoard logging
+  wandb: false  # Enable Weights & Biases logging
+  
+  # Privacy-specific logging
+  log_privacy_metrics: true
+  privacy_log_freq: 1  # Log privacy metrics every N rounds
+  
+# Evaluation settings
+evaluation:
+  eval_freq: 5  # Evaluate every N rounds
+  eval_on_train: false  # Evaluate on training data
+  eval_on_test: true  # Evaluate on test data
+  save_predictions: false  # Save predictions for analysis
+
+# Early stopping (optional, adjusted for privacy)
+early_stopping:
+  patience: 30  # Stop if no improvement for N rounds (higher for privacy)
+  min_delta: 0.005  # Minimum improvement threshold (lower for privacy)
+  metric: "test_accuracy"  # Metric to monitor
+
+# Resource constraints
+resources:
+  max_memory_gb: null  # Maximum memory usage (null for no limit)
+  max_time_hours: 12  # Maximum training time (reasonable for private training)
+
+# Reproducibility settings
+reproducibility:
+  deterministic: true  # Use deterministic algorithms for privacy reproducibility
+  benchmark: false  # Disable cudnn benchmark for deterministic privacy
+
+# Notification settings (optional)
+# notification:
+#   slack:
+#     enable: false
+#     webhook_url: null
+#     channel: "#experiments"
+#     notify_on_start: true
+#     notify_on_completion: true
+#     notify_on_error: true
+#     notify_progress_freq: 20  # Notify every N rounds
+
+# Advanced privacy settings
+advanced_privacy:
+  # Subsampling
+  poisson_sampling: true  # Use Poisson subsampling
+  
+  # Noise calibration
+  noise_calibration: "auto"  # "auto", "manual", or "adaptive"
+  
+  # Privacy budget allocation
+  budget_allocation: "uniform"  # "uniform" or "adaptive"
+  
+  # Privacy composition
+  composition_method: "rdp"  # "basic", "advanced", or "rdp"
