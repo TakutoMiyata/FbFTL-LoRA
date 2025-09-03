@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 import copy
 from typing import Dict, Optional
 from tqdm import tqdm
-from .privacy_utils import DifferentialPrivacy
+from privacy_utils import DifferentialPrivacy
 
 
 class FedSAFTLClient:

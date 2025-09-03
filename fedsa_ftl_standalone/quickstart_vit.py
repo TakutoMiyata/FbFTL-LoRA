@@ -12,8 +12,9 @@ import os
 
 # Add src directory to path
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
+# Now import from src modules
 from fedsa_ftl_model_vit import create_model_vit
 from fedsa_ftl_client import FedSAFTLClient
 from fedsa_ftl_server import FedSAFTLServer
