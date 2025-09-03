@@ -13,11 +13,13 @@ import sys
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Add src directory to path
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
 
-from src.fedsa_ftl_model_vit import create_model_vit
-from src.fedsa_ftl_client import FedSAFTLClient
-from src.fedsa_ftl_server import FedSAFTLServer
-from src.data_utils import prepare_federated_data, get_client_dataloader
+from fedsa_ftl_model_vit import create_model_vit
+from fedsa_ftl_client import FedSAFTLClient
+from fedsa_ftl_server import FedSAFTLServer
+from data_utils import prepare_federated_data, get_client_dataloader
 
 
 class ViTFedSAFTLClient(FedSAFTLClient):
