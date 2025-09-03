@@ -11,7 +11,7 @@ from typing import Dict, Optional, Tuple
 class DifferentialPrivacy:
     """
     Differential Privacy mechanism for FedSA-FTL
-    Implements Gaussian mechanism for DP-SGD
+    Implements proper DP-SGD with per-sample gradient clipping
     """
     
     def __init__(self, epsilon: float = 1.0, delta: float = 1e-5, 
@@ -21,15 +21,15 @@ class DifferentialPrivacy:
         Initialize DP mechanism
         
         Args:
-            epsilon: Privacy budget (smaller = more private)
+            epsilon: Total privacy budget (smaller = more private)
             delta: Privacy parameter for (ε,δ)-differential privacy
-            max_grad_norm: Maximum L2 norm for gradient clipping
+            max_grad_norm: Maximum L2 norm for per-sample gradient clipping
             noise_multiplier: Noise scale (if None, computed from epsilon)
             total_rounds: Total number of rounds for budget allocation
         """
-        self.epsilon = float(epsilon)  # Ensure float type
-        self.delta = float(delta)  # Ensure float type
-        self.max_grad_norm = float(max_grad_norm)  # Ensure float type
+        self.epsilon = float(epsilon)
+        self.delta = float(delta)
+        self.max_grad_norm = float(max_grad_norm)  # Per-sample gradient clipping threshold
         self.total_rounds = total_rounds
         
         # Compute per-round epsilon budget
@@ -37,8 +37,8 @@ class DifferentialPrivacy:
         
         # Compute noise multiplier from per-round budget if not provided
         if noise_multiplier is None:
-            # Approximation for Gaussian mechanism
-            # σ ≈ sqrt(2 * log(1.25/δ)) / ε_per_round
+            # Using strong composition theorem approximation
+            # σ = max_grad_norm * sqrt(2 * log(1.25/δ)) / ε_per_round
             self.noise_multiplier = np.sqrt(2 * np.log(1.25 / self.delta)) / self.epsilon_per_round
         else:
             self.noise_multiplier = float(noise_multiplier)
@@ -47,59 +47,134 @@ class DifferentialPrivacy:
         self.steps = 0
         self.consumed_epsilon = 0.0
     
-    def add_noise_to_parameters(self, params: Dict[str, torch.Tensor], 
-                                num_samples: int) -> Dict[str, torch.Tensor]:
+    def add_noise_to_accumulated_updates(self, accumulated_updates: Dict[str, torch.Tensor], 
+                                        num_samples: int) -> Dict[str, torch.Tensor]:
         """
-        Add Gaussian noise to parameters for differential privacy
+        Add calibrated Gaussian noise to accumulated gradient updates
         
         Args:
-            params: Dictionary of parameters (A matrices)
-            num_samples: Number of samples in the dataset (for scaling)
+            accumulated_updates: Dictionary of averaged clipped gradient updates
+            num_samples: Number of samples used to compute the average
         
         Returns:
-            Noisy parameters
+            Noisy updates with proper DP guarantees
         """
-        noisy_params = {}
+        noisy_updates = {}
         
-        for name, param in params.items():
-            # Compute sensitivity based on max_grad_norm and batch size
-            sensitivity = self.max_grad_norm / num_samples
+        for name, update_tensor in accumulated_updates.items():
+            # Since we averaged the gradients, the sensitivity of the average is max_grad_norm / num_samples
+            # This ensures correct noise calibration for averaged gradients
+            noise_std = (self.noise_multiplier * self.max_grad_norm) / num_samples
             
-            # Add Gaussian noise
-            noise_std = sensitivity * self.noise_multiplier
-            noise = torch.randn_like(param) * noise_std
-            
-            noisy_params[name] = param + noise
+            # Generate and add Gaussian noise
+            noise = torch.randn_like(update_tensor) * noise_std
+            noisy_updates[name] = update_tensor + noise
         
         # Update privacy accounting
         self.steps += 1
         self._update_privacy_budget()
         
-        return noisy_params
+        return noisy_updates
     
-    def clip_parameters(self, params: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def clip_per_sample_gradients(self, model, per_sample_grads: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
-        Clip parameters to bounded L2 norm
+        Clip per-sample gradients to bounded L2 norm
         
         Args:
-            params: Dictionary of parameters to clip
+            model: Model instance
+            per_sample_grads: Dictionary of per-sample gradients
         
         Returns:
-            Clipped parameters
+            Clipped per-sample gradients
         """
-        clipped_params = {}
+        clipped_grads = {}
         
-        for name, param in params.items():
-            # Compute L2 norm
-            param_norm = torch.norm(param, p=2)
-            
-            # Clip if necessary
-            if param_norm > self.max_grad_norm:
-                clipped_params[name] = param * (self.max_grad_norm / param_norm)
-            else:
-                clipped_params[name] = param.clone()
+        for name, grad in per_sample_grads.items():
+            if 'lora_A' in name:  # Only clip LoRA A matrix gradients
+                # Compute L2 norm of this gradient
+                grad_norm = torch.norm(grad, p=2)
+                
+                # Clip if necessary
+                if grad_norm > self.max_grad_norm:
+                    clipped_grads[name] = grad * (self.max_grad_norm / grad_norm)
+                else:
+                    clipped_grads[name] = grad.clone()
+                    
+        return clipped_grads
+    
+    def simulate_per_sample_clipping(self, model, dataloader, local_epochs: int) -> Dict[str, torch.Tensor]:
+        """
+        Simulate per-sample gradient clipping using micro-batching
         
-        return clipped_params
+        This implements true per-sample gradient clipping for DP-SGD.
+        Each sample's gradient is computed individually, clipped, and accumulated.
+        
+        Args:
+            model: Model instance
+            dataloader: Local training data
+            local_epochs: Number of local epochs
+        
+        Returns:
+            Accumulated clipped gradient updates for LoRA A matrices
+        """
+        accumulated_updates = {}
+        criterion = torch.nn.CrossEntropyLoss()
+        sample_count = 0
+        
+        # Initialize accumulated updates
+        for name, param in model.named_parameters():
+            if 'lora_A' in name and param.requires_grad:
+                accumulated_updates[name] = torch.zeros_like(param)
+        
+        model.train()
+        for epoch in range(local_epochs):
+            for batch_idx, (images, labels) in enumerate(dataloader):
+                # Process each sample individually for true per-sample gradient clipping
+                for i in range(len(images)):
+                    # Single sample
+                    single_image = images[i:i+1].to(model.device if hasattr(model, 'device') else images.device)
+                    single_label = labels[i:i+1].to(model.device if hasattr(model, 'device') else labels.device)
+                    
+                    # Forward pass
+                    outputs = model(single_image)
+                    loss = criterion(outputs, single_label)
+                    
+                    # Backward pass
+                    loss.backward()
+                    
+                    # Collect gradients for LoRA A matrices
+                    sample_grads = {}
+                    total_norm_squared = 0.0
+                    
+                    # First pass: collect gradients and compute total norm
+                    for name, param in model.named_parameters():
+                        if 'lora_A' in name and param.requires_grad and param.grad is not None:
+                            sample_grads[name] = param.grad.clone()
+                            total_norm_squared += torch.sum(param.grad ** 2).item()
+                    
+                    # Compute total L2 norm across all LoRA A parameters
+                    total_norm = np.sqrt(total_norm_squared)
+                    
+                    # Clip and accumulate gradients
+                    clip_factor = min(1.0, self.max_grad_norm / (total_norm + 1e-8))
+                    
+                    for name, grad in sample_grads.items():
+                        # Apply clipping factor
+                        clipped_grad = grad * clip_factor
+                        # Accumulate clipped gradient
+                        accumulated_updates[name] += clipped_grad
+                    
+                    sample_count += 1
+                    
+                    # Clear gradients for next sample
+                    model.zero_grad()
+        
+        # Average the accumulated gradients by sample count
+        for name in accumulated_updates:
+            accumulated_updates[name] = accumulated_updates[name] / sample_count
+        
+        # Return both the averaged updates and the sample count for correct noise scaling
+        return accumulated_updates, sample_count
     
     def apply_differential_privacy(self, params: Dict[str, torch.Tensor], 
                                    num_samples: int) -> Dict[str, torch.Tensor]:

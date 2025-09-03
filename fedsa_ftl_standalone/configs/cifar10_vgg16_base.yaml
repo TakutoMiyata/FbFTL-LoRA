@@ -46,3 +46,7 @@ training:
   local_epochs: 5  # Increase back for better local learning
   learning_rate: 0.1  # Much higher learning rate for LoRA fine-tuning
   weight_decay: 0.0005  # Moderate regularization
+  optimizer: "sgd"  # Options: "sgd", "adam", "adamw"
+  momentum: 0.9  # For SGD optimizer
+  # betas: [0.9, 0.999]  # For Adam/AdamW optimizers
+  # eps: 1e-8  # For Adam/AdamW optimizers
