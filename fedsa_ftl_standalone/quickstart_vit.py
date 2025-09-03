@@ -118,13 +118,24 @@ def main():
     # Create clients
     print(f"\nCreating {config['federated']['num_clients']} ViT federated clients...")
     clients = []
+    
+    # Create privacy mechanism if enabled
+    privacy_mechanism = None
+    if config.get('privacy', {}).get('enable_privacy', False):
+        from privacy_utils import DifferentialPrivacy
+        privacy_mechanism = DifferentialPrivacy(
+            epsilon=config['privacy'].get('epsilon', 10.0),
+            delta=config['privacy'].get('delta', 1e-5),
+            max_grad_norm=config['privacy'].get('max_grad_norm', 0.5)
+        )
+    
     for client_id in range(config['federated']['num_clients']):
         client_model = create_model_vit(config['model'])
         client = ViTFedSAFTLClient(
             client_id, 
             client_model, 
             device,
-            config.get('privacy')
+            privacy_mechanism
         )
         clients.append(client)
     
