@@ -7,14 +7,15 @@ import torch
 import numpy as np
 from typing import Dict, Optional, Tuple
 
-# Import Opacus for efficient DP-SGD
-try:
-    from opacus import PrivacyEngine
-    OPACUS_AVAILABLE = True
-except ImportError:
-    OPACUS_AVAILABLE = False
-    raise ImportError("Opacus is required for differential privacy. Install with: pip install opacus")
+from opacus import PrivacyEngine
+import warnings
 
+# OpacusのSecure RNGに関する警告を非表示にする
+warnings.filterwarnings('ignore', message='Secure RNG turned off.*')
+# Opacusのalphaに関する警告を非表示にする
+warnings.filterwarnings('ignore', message='Optimal order is the largest alpha.*')
+# PyTorchのbackward hookに関する警告を非表示にする
+warnings.filterwarnings('ignore', message='Full backward hook is firing.*')
 
 class DifferentialPrivacy:
     """
