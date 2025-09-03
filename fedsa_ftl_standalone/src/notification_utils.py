@@ -249,6 +249,120 @@ class SlackNotifier:
             blocks=blocks
         )
     
+    def send_progress_update(self, config: Dict, round_idx: int, round_stats: Dict, 
+                           server_summary: Dict) -> bool:
+        """
+        Send periodic progress update notification
+        
+        Args:
+            config: Training configuration
+            round_idx: Current round number (0-indexed)
+            round_stats: Current round statistics
+            server_summary: Server summary statistics
+        
+        Returns:
+            True if message was sent successfully
+        """
+        experiment_name = config.get('experiment', {}).get('name', 'Unknown')
+        total_rounds = config.get('federated', {}).get('num_rounds', 0)
+        current_round = round_idx + 1
+        
+        # Progress percentage
+        progress_pct = (current_round / total_rounds) * 100 if total_rounds > 0 else 0
+        progress_bar = "█" * int(progress_pct // 5) + "░" * (20 - int(progress_pct // 5))
+        
+        # Performance metrics
+        train_acc = round_stats.get('train_accuracy', 0)
+        test_acc = round_stats.get('test_accuracy', 0)
+        comm_cost = round_stats.get('communication_cost_mb', 0)
+        best_acc = server_summary.get('best_test_accuracy', 0)
+        
+        # Privacy info if available
+        privacy_text = ""
+        if 'privacy' in server_summary and server_summary['privacy'].get('privacy_enabled', False):
+            epsilon_spent = server_summary['privacy'].get('total_epsilon_spent', 0)
+            privacy_text = f"🔒 Privacy Budget: ε={epsilon_spent:.2f}"
+        
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": f"📊 Training Progress - Round {current_round}/{total_rounds}"
+                }
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Experiment:*\n{experiment_name}"
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Progress:*\n{progress_pct:.1f}% `{progress_bar}`"
+                    }
+                ]
+            },
+            {
+                "type": "divider"
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*📈 Round Performance*"
+                }
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Train Accuracy:*\n{train_acc:.2f}%"
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Test Accuracy:*\n{test_acc:.2f}%"
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Best So Far:*\n{best_acc:.2f}%"
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Communication:*\n{comm_cost:.2f} MB"
+                    }
+                ]
+            }
+        ]
+        
+        # Add privacy section if enabled
+        if privacy_text:
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": privacy_text
+                }
+            })
+        
+        # Add context with timestamp
+        blocks.append({
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Round {current_round}/{total_rounds} complete"
+                }
+            ]
+        })
+        
+        return self.send_message(
+            f"Progress Update: {experiment_name} - Round {current_round}/{total_rounds} - Test: {test_acc:.2f}%",
+            blocks=blocks
+        )
+    
     def send_error_notification(self, config: Dict, error_message: str) -> bool:
         """
         Send error notification

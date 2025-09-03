@@ -17,6 +17,7 @@ from src.fedsa_ftl_client import FedSAFTLClient
 from src.fedsa_ftl_server import FedSAFTLServer
 from src.data_utils import prepare_federated_data, get_client_dataloader
 from src.privacy_utils import create_privacy_mechanism, SecureAggregation
+from src.notification_utils import SlackNotifier
 from torch.utils.data import DataLoader
 import time
 
@@ -82,6 +83,14 @@ def main(config):
     # Initialize server (no model needed, only manages A matrices)
     print("\nInitializing server...")
     server = FedSAFTLServer(device)
+    
+    # Initialize Slack notifications
+    slack_notifier = SlackNotifier()
+    if slack_notifier.enabled:
+        print("\n🔔 Slack notifications enabled")
+        slack_notifier.send_training_start(config)
+    else:
+        print("\n📴 Slack notifications disabled")
     
     # Get model size statistics from a temporary model
     temp_model = create_model(config['model'])
@@ -182,13 +191,31 @@ def main(config):
         
         print(f"  Communication Cost: {round_stats['communication_cost_mb']:.2f} MB")
         
-        # Save checkpoint periodically
-        if (round_idx + 1) % config['federated'].get('checkpoint_freq', 10) == 0:
+        # Save checkpoint and send Slack notification periodically
+        checkpoint_freq = config['federated'].get('checkpoint_freq', 10)
+        if (round_idx + 1) % checkpoint_freq == 0:
+            # Save checkpoint
             checkpoint_path = os.path.join(
                 config['experiment']['output_dir'],
                 f'checkpoint_round_{round_idx + 1}.pt'
             )
             server.save_checkpoint(checkpoint_path)
+            
+            # Send Slack progress update
+            if slack_notifier.enabled:
+                summary = server.get_summary_stats()
+                # Add privacy information to summary if enabled
+                if privacy_config.get('enable_privacy', False) and clients[0].privacy_mechanism:
+                    total_epsilon, delta = clients[0].privacy_mechanism.get_privacy_spent()
+                    summary['privacy'] = {
+                        'total_epsilon_spent': total_epsilon,
+                        'delta': delta,
+                        'privacy_enabled': True
+                    }
+                else:
+                    summary['privacy'] = {'privacy_enabled': False}
+                
+                slack_notifier.send_progress_update(config, round_idx, round_stats, summary)
     
     # Final evaluation with all clients
     print("\n" + "=" * 80)
