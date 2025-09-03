@@ -250,7 +250,7 @@ def show_vit_model_info():
     }
     
     # Create temporary device
-    device = torch.device('cuda' if config['use_gpu'] else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # Show statistics for each ViT variant
     for model_name, config in vit_configs.items():
