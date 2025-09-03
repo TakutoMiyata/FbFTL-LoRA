@@ -15,8 +15,10 @@ def test_differential_privacy():
     print("Testing Differential Privacy Mechanism")
     print("=" * 60)
     
-    # Create DP mechanism
-    dp = DifferentialPrivacy(epsilon=1.0, delta=1e-5, max_grad_norm=1.0)
+    # Create DP mechanism (test both Opacus and manual implementation)
+    print("\nTesting with Opacus (if available):")
+    dp = DifferentialPrivacy(epsilon=1.0, delta=1e-5, max_grad_norm=1.0, 
+                             total_rounds=10, use_opacus=True)
     
     # Create dummy parameters
     params = {

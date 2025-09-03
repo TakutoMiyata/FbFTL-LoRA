@@ -87,7 +87,9 @@ def run_minimal_vit_test():
         'delta': 1e-5,
         'max_grad_norm': 0.5,
         'noise_multiplier': None,
-        'secure_aggregation': False
+        'secure_aggregation': False,
+        'use_opacus': True,  # Use Opacus for efficient DP-SGD
+        'total_rounds': 5  # Total rounds for privacy budget
     }
     
     # Set seed
@@ -137,7 +139,9 @@ def run_minimal_vit_test():
         privacy_mechanism = DifferentialPrivacy(
             epsilon=config['privacy'].get('epsilon', 10.0),
             delta=config['privacy'].get('delta', 1e-5),
-            max_grad_norm=config['privacy'].get('max_grad_norm', 0.5)
+            max_grad_norm=config['privacy'].get('max_grad_norm', 0.5),
+            total_rounds=config['privacy'].get('total_rounds', 5),
+            use_opacus=config['privacy'].get('use_opacus', True)
         )
     
     for client_id in range(config['federated']['num_clients']):
