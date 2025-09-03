@@ -87,6 +87,8 @@ def main():
     
     # Prepare data
     print("\nPreparing federated data...")
+    # Ensure ViT-specific transforms are used
+    config['data']['model_type'] = 'vit'
     trainset, testset, client_indices = prepare_federated_data(config['data'])
     
     # Create test dataloader

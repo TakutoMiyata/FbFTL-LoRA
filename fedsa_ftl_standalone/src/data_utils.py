@@ -10,29 +10,56 @@ import numpy as np
 from typing import List, Tuple, Dict
 
 
-def get_cifar_transforms():
-    """Get CIFAR data transforms for VGG-16"""
-    # VGG-16 expects 224x224 images, ImageNet normalization
-    transform_train = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(10),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
+def get_cifar_transforms(model_type='vgg'):
+    """Get CIFAR data transforms based on model type
     
-    transform_test = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
+    Args:
+        model_type: 'vgg' for VGG models, 'vit' for Vision Transformers
+    """
+    if model_type == 'vgg':
+        # VGG-16 expects 224x224 images, ImageNet normalization
+        transform_train = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomRotation(10),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        
+        transform_test = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+    elif model_type == 'vit':
+        # ViT works with 32x32 for CIFAR, use CIFAR normalization
+        transform_train = transforms.Compose([
+            # Keep original 32x32 size for CIFAR
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomCrop(32, padding=4),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2435, 0.2616])  # CIFAR stats
+        ])
+        
+        transform_test = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2435, 0.2616])  # CIFAR stats
+        ])
+    else:
+        raise ValueError(f"Unknown model type: {model_type}. Use 'vgg' or 'vit'")
     
     return transform_train, transform_test
 
 
-def load_cifar_data(dataset_name='cifar100', data_dir='./data'):
-    """Load CIFAR dataset"""
-    transform_train, transform_test = get_cifar_transforms()
+def load_cifar_data(dataset_name='cifar100', data_dir='./data', model_type='vgg'):
+    """Load CIFAR dataset
+    
+    Args:
+        dataset_name: 'cifar10' or 'cifar100'
+        data_dir: Directory to store/load data
+        model_type: 'vgg' or 'vit' for appropriate transforms
+    """
+    transform_train, transform_test = get_cifar_transforms(model_type)
     
     if dataset_name.lower() == 'cifar100':
         trainset = torchvision.datasets.CIFAR100(
@@ -189,7 +216,9 @@ def prepare_federated_data(config: Dict):
     
     # Load CIFAR data (CIFAR-100 by default, CIFAR-10 optional)
     dataset_name = config.get('dataset_name', 'cifar100')
-    trainset, testset = load_cifar_data(dataset_name, config.get('data_dir', './data'))
+    # Detect model type from config or default to 'vgg' for backward compatibility
+    model_type = config.get('model_type', 'vgg')
+    trainset, testset = load_cifar_data(dataset_name, config.get('data_dir', './data'), model_type)
     
     # Determine number of classes based on dataset
     num_classes = 100 if dataset_name.lower() == 'cifar100' else 10

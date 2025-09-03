@@ -64,7 +64,8 @@ def run_minimal_vit_test():
             'data_split': 'non_iid',
             'alpha': 0.5,
             'verbose': True,
-            'num_clients': 3  # Override for testing
+            'num_clients': 3,  # Override for testing
+            'model_type': 'vit'  # Important: Use ViT-specific transforms
         },
         'federated': {
             'num_clients': 3,
@@ -214,74 +215,63 @@ def run_minimal_vit_test():
     return best_accuracy
 
 
-def compare_model_sizes():
-    """Compare model sizes between VGG16 and ViT"""
+def show_vit_model_info():
+    """Display ViT model size and statistics"""
     print("\n" + "=" * 80)
-    print("Model Size Comparison: VGG16 vs ViT")
+    print("Vision Transformer Model Information")
     print("=" * 80)
     
-    # Import VGG16 model for comparison
-    from src.fedsa_ftl_model import create_model
-    
-    # VGG16 config
-    vgg_config = {
-        'num_classes': 100,
-        'model_name': 'vgg16',
-        'lora_r': 16,
-        'lora_alpha': 16,
-        'lora_dropout': 0.1,
-        'freeze_backbone': True
+    # ViT configurations for different sizes
+    vit_configs = {
+        'vit_tiny': {
+            'num_classes': 100,
+            'model_name': 'vit_tiny',
+            'lora_r': 16,
+            'lora_alpha': 16,
+            'lora_dropout': 0.1,
+            'freeze_backbone': True
+        },
+        'vit_small': {
+            'num_classes': 100,
+            'model_name': 'vit_small',
+            'lora_r': 16,
+            'lora_alpha': 16,
+            'lora_dropout': 0.1,
+            'freeze_backbone': True
+        },
+        'vit_base': {
+            'num_classes': 100,
+            'model_name': 'vit_base',
+            'lora_r': 16,
+            'lora_alpha': 16,
+            'lora_dropout': 0.1,
+            'freeze_backbone': True
+        }
     }
     
-    # ViT config
-    vit_config = {
-        'num_classes': 100,
-        'model_name': 'vit_small',
-        'lora_r': 16,
-        'lora_alpha': 16,
-        'lora_dropout': 0.1,
-        'freeze_backbone': True
-    }
+    # Create temporary device
+    device = torch.device('cuda' if config['use_gpu'] else 'cpu')
     
-    # Create models
-    vgg_model = create_model(vgg_config)
-    vit_model = create_model_vit(vit_config)
-    
-    # Create temporary clients to get model stats
-    device = torch.device('cpu')
-    vgg_client = FedSAFTLClient(0, vgg_model, device)
-    vit_client = ViTFedSAFTLClient(0, vit_model, device)
-    
-    vgg_stats = vgg_client.get_model_size()
-    vit_stats = vit_client.get_model_size()
-    
-    print(f"\nVGG16 Model:")
-    print(f"  Total parameters: {vgg_stats['total_params']:,}")
-    print(f"  Trainable parameters: {vgg_stats['trainable_params']:,}")
-    print(f"  Communication parameters: {vgg_stats['communication_params']:,}")
-    print(f"  Compression ratio: {vgg_stats['compression_ratio']:.2f}x")
-    
-    print(f"\nViT Small Model:")
-    print(f"  Total parameters: {vit_stats['total_params']:,}")
-    print(f"  Trainable parameters: {vit_stats['trainable_params']:,}")
-    print(f"  Communication parameters: {vit_stats['communication_params']:,}")
-    print(f"  Compression ratio: {vit_stats['compression_ratio']:.2f}x")
-    
-    # Calculate ratios
-    param_ratio = vit_stats['total_params'] / vgg_stats['total_params']
-    trainable_ratio = vit_stats['trainable_params'] / vgg_stats['trainable_params']
-    comm_ratio = vit_stats['communication_params'] / vgg_stats['communication_params']
-    
-    print(f"\nComparison (ViT/VGG16 ratios):")
-    print(f"  Total parameters: {param_ratio:.2f}x")
-    print(f"  Trainable parameters: {trainable_ratio:.2f}x")
-    print(f"  Communication parameters: {comm_ratio:.2f}x")
+    # Show statistics for each ViT variant
+    for model_name, config in vit_configs.items():
+        try:
+            vit_model = create_model_vit(config)
+            vit_client = ViTFedSAFTLClient(0, vit_model, device)
+            vit_stats = vit_client.get_model_size()
+            
+            print(f"\n{model_name.upper()} Model:")
+            print(f"  Total parameters: {vit_stats['total_params']:,}")
+            print(f"  Trainable parameters: {vit_stats['trainable_params']:,}")
+            print(f"  Communication parameters: {vit_stats['communication_params']:,}")
+            print(f"  Compression ratio: {vit_stats['compression_ratio']:.2f}x")
+        except Exception as e:
+            print(f"\n{model_name.upper()} Model: Error - {e}")
 
 
 if __name__ == "__main__":
     try:
-        # First compare model sizes
-        compare_model_sizes()
+        # First show ViT model information
+        show_vit_model_info()
         
         # Run ViT test
         best_accuracy = run_minimal_vit_test()

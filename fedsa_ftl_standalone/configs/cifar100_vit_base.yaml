@@ -31,6 +31,7 @@ data:
   data_split: "non_iid"  # "iid" or "non_iid"
   alpha: 0.5  # Dirichlet distribution parameter for non-IID split
   verbose: true  # Print data distribution analysis
+  model_type: "vit"  # Use ViT-specific transforms (32x32 images)
 
 # Federated learning configuration
 federated:
