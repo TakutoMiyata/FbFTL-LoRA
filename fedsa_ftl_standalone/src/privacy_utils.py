@@ -36,8 +36,6 @@ class DifferentialPrivacy:
             total_rounds: Total number of rounds for budget allocation
             use_opacus: Whether to use Opacus (must be True)
         """
-        if not OPACUS_AVAILABLE:
-            raise ImportError("Opacus is required. Install with: pip install opacus")
             
         self.epsilon = float(epsilon)
         self.delta = float(delta)
@@ -270,8 +268,6 @@ def create_privacy_mechanism(config: Dict) -> Optional[DifferentialPrivacy]:
     if not config.get('enable_privacy', False):
         return None
     
-    if not OPACUS_AVAILABLE:
-        raise ImportError("Opacus is required for differential privacy. Install with: pip install opacus")
     
     # Ensure all parameters are properly typed
     epsilon = float(config.get('epsilon', 1.0))
