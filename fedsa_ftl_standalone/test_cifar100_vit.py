@@ -108,8 +108,7 @@ def run_minimal_vit_test():
     test_dataloader = torch.utils.data.DataLoader(
         testset, 
         batch_size=config['data']['batch_size'], 
-        shuffle=False,
-        num_workers=config['data'].get('num_workers', 0)
+        shuffle=False
     )
     
     # Initialize server
@@ -171,8 +170,7 @@ def run_minimal_vit_test():
                 trainset, 
                 client_indices[client_id],
                 config['data']['batch_size'],
-                shuffle=True,
-                num_workers=config['data'].get('num_workers', 0)
+                shuffle=True
             )
             
             # Update with global A matrices if available
