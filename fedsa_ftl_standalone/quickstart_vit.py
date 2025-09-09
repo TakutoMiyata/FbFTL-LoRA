@@ -170,8 +170,7 @@ def main():
                 trainset,
                 client_indices[client_id],
                 config['data']['batch_size'],
-                shuffle=True,
-                num_workers=config['data'].get('num_workers', 0)
+                shuffle=True
             )
             
             # Update with global parameters

@@ -9,10 +9,10 @@ A state-of-the-art federated learning framework that combines frozen backbone tr
 - **LoRA-based Selective Aggregation**: Applies Low-Rank Adaptation (LoRA) to classification heads with A/B matrix separation
 - **Extreme Communication Efficiency**: Shares only LoRA A-matrices, achieving >100x reduction in communication overhead
 - **GPU Acceleration**: Full CUDA support for accelerated training
-- **Differential Privacy (DP-SGD)**: Implements rigorous per-sample gradient clipping with calibrated noise addition
+- **Opacus-based Differential Privacy**: Efficient DP-SGD implementation with automated hook management
 - **Client Personalization**: B-matrices remain local for client-specific adaptation while A-matrices are globally aggregated
 - **Non-IID Data Support**: Handles heterogeneous data distributions using Dirichlet allocation
-- **Flexible Optimizer Support**: Configurable optimizers (SGD, Adam, AdamW) for different scenarios
+- **Flexible Configuration**: YAML-based configuration system with comprehensive options
 - **Real-time Notifications**: Slack integration for training progress monitoring
 
 ## 🏗️ Architecture
@@ -89,23 +89,27 @@ pip install -r requirements.txt
 - pyyaml>=6.0
 - tensorboard>=2.13.0
 - requests>=2.31.0
+- opacus>=1.4.0 (for differential privacy)
 
 ## 🚀 Quick Start
 
 ### Basic Training
 
 ```bash
-# CIFAR-10 with VGG16 (recommended)
+# CIFAR-10 with VGG16 (recommended for beginners)
 python main.py --config configs/cifar10_vgg16_base.yaml
 
 # CIFAR-100 with VGG16 and differential privacy
 python main.py --config configs/cifar100_vgg16_private.yaml
 
 # CIFAR-100 with Vision Transformer (ViT)
-python quickstart_vit.py
+python quickstart_vit.py --config configs/cifar100_vit_base.yaml
 
-# Custom GPU and seed
-python main.py --config configs/cifar10_vgg16_base.yaml --gpu 0 --seed 42
+# CIFAR-10 with ViT and privacy
+python quickstart_vit.py --config configs/cifar10_vit_private.yaml
+
+# Custom rounds and clients
+python quickstart_vit.py --rounds 50 --clients 5
 ```
 
 ### Test Scripts
@@ -119,6 +123,9 @@ python test_cifar100_vgg16.py
 
 # Test CIFAR-100 with Vision Transformer
 python test_cifar100_vit.py
+
+# Test privacy mechanisms
+python test_privacy.py
 
 # Minimal test for quick validation
 python test_minimal.py
@@ -142,13 +149,16 @@ model:
 #### Vision Transformer Settings
 ```yaml
 model:
-  model_type: "vit"            # Vision Transformer
-  img_size: 32                 # Input image size
-  patch_size: 4                # Patch size (32/4 = 64 patches)
-  embed_dim: 384               # Embedding dimension
-  depth: 12                    # Number of transformer blocks
-  num_heads: 6                 # Number of attention heads
-  mlp_ratio: 4.0              # MLP hidden dim ratio
+  model_name: "vit_small"          # Options: vit_tiny, vit_small, vit_base
+  num_classes: 100                 # CIFAR-10: 10, CIFAR-100: 100
+  lora_r: 16                       # LoRA rank (16 recommended for CIFAR-100)
+  lora_alpha: 16                   # LoRA scaling (1:1 ratio with rank)
+  lora_dropout: 0.1                # Dropout for regularization
+  freeze_backbone: true            # Always true for transfer learning
+
+data:
+  model_type: "vit"                # Enables ViT-specific transforms
+  batch_size: 32                   # Smaller batch for memory efficiency
 ```
 
 ### Training Configuration
@@ -156,12 +166,13 @@ model:
 ```yaml
 training:
   local_epochs: 5              # Local training epochs per round
-  learning_rate: 0.01-0.1      # Higher for LoRA fine-tuning
-  weight_decay: 0.0005         # L2 regularization
-  optimizer: "sgd"             # Options: "sgd", "adam", "adamw"
-  momentum: 0.9                # For SGD
-  betas: [0.9, 0.999]         # For Adam/AdamW
-  batch_size: 32              # Local batch size
+  learning_rate: 0.01          # VGG16: 0.01-0.1, ViT: 0.001-0.01
+  weight_decay: 0.0005         # VGG16: 0.0005, ViT: 0.0001
+
+# Optional optimizer specification (defaults to SGD)
+# optimizer: "sgd"             # Options: "sgd", "adam", "adamw"
+# momentum: 0.9                # For SGD
+# betas: [0.9, 0.999]         # For Adam/AdamW
 ```
 
 ### Federated Learning Configuration
@@ -175,39 +186,58 @@ federated:
   aggregation_method: "fedavg" # Weighted averaging by sample count
 ```
 
-### Privacy Configuration (DP-SGD)
+### Privacy Configuration (Opacus-based DP-SGD)
 
 ```yaml
 privacy:
   enable_privacy: true         # Enable differential privacy
-  epsilon: 10.0               # Privacy budget (ε)
-  delta: 1e-5                 # Privacy parameter (δ)
-  max_grad_norm: 0.5-1.0      # Per-sample gradient clipping bound
-  total_rounds: 100           # For budget allocation
+  epsilon: 8.0                 # Privacy budget (ε) - lower = more private
+  delta: 1e-5                  # Privacy parameter (δ)
+  max_grad_norm: 1.0          # Per-sample gradient clipping bound
+  # noise_multiplier: null     # Auto-calculated from epsilon/delta
+  # secure_aggregation: false  # Additional privacy layer
 ```
+
+**Important Notes:**
+- Uses Opacus library for efficient DP-SGD implementation
+- Automatically manages model hooks and gradient clipping
+- GPU-optimized for better performance
+- Supports both VGG16 and ViT models
 
 ## 🔒 Differential Privacy Implementation
 
-Our implementation follows rigorous DP-SGD principles:
+Our implementation uses the Opacus library for efficient and reliable DP-SGD:
 
-1. **Per-Sample Gradient Clipping**: Each sample's gradient is individually clipped to bound sensitivity
-2. **Gradient Averaging**: Clipped gradients are averaged across samples
-3. **Calibrated Noise Addition**: Gaussian noise scaled by `(σ × C) / n` where:
-   - σ = noise multiplier
-   - C = clipping bound
-   - n = number of samples
+### Key Features:
+- **Opacus Integration**: Uses PyTorch's official DP library for proven implementations
+- **Automatic Hook Management**: Handles model preparation and cleanup automatically
+- **GPU Optimization**: Fully accelerated on CUDA devices
+- **Per-Sample Clipping**: Rigorous gradient clipping at the sample level
+- **Privacy Accounting**: Accurate epsilon/delta tracking with RDP
 
+### How it Works:
 ```python
-# Pseudocode for DP-SGD
-for sample in batch:
-    grad = compute_gradient(sample)
-    clipped_grad = clip_to_norm(grad, max_norm=C)
-    accumulate(clipped_grad)
-
-avg_grad = sum(clipped_grads) / n_samples
-noisy_grad = avg_grad + N(0, (σ×C/n)²)
-update_model(noisy_grad)
+# Opacus automatically handles:
+1. Model preparation with privacy hooks
+2. Per-sample gradient computation
+3. Gradient clipping to max_grad_norm
+4. Calibrated noise addition
+5. Privacy budget accounting
 ```
+
+### Configuration Example:
+```yaml
+privacy:
+  enable_privacy: true
+  epsilon: 8.0          # Total privacy budget
+  delta: 1e-5          # Privacy parameter
+  max_grad_norm: 1.0   # Clipping threshold
+```
+
+### Privacy vs. Accuracy Trade-off:
+- **High Privacy** (ε=1-5): Significant accuracy reduction but strong privacy
+- **Moderate Privacy** (ε=8-15): Balanced trade-off for practical use
+- **Low Privacy** (ε=20+): Minimal accuracy impact with basic privacy
 
 ## 📊 Performance Characteristics
 
@@ -257,15 +287,24 @@ fedsa_ftl_standalone/
 │   ├── privacy_utils.py           # DP-SGD implementation (GPU-optimized)
 │   └── notification_utils.py      # Slack notifications
 ├── configs/                        # YAML configuration files
-│   ├── cifar10_vgg16_base.yaml
-│   ├── cifar100_vgg16_private.yaml
-│   └── cifar100_vit_base.yaml
+│   ├── cifar10_vgg16_base.yaml    # CIFAR-10 + VGG16 baseline
+│   ├── cifar10_vit_base.yaml      # CIFAR-10 + ViT baseline  
+│   ├── cifar10_vit_private.yaml   # CIFAR-10 + ViT with privacy
+│   ├── cifar100_vgg16_base.yaml   # CIFAR-100 + VGG16 baseline
+│   ├── cifar100_vgg16_private.yaml # CIFAR-100 + VGG16 with privacy
+│   ├── cifar100_vit_base.yaml     # CIFAR-100 + ViT baseline
+│   └── cifar100_vit_private.yaml  # CIFAR-100 + ViT with privacy
 ├── experiments/                    # Training outputs and checkpoints
 ├── data/                          # Dataset cache directory
-├── main.py                        # Main training script
+├── main.py                        # Main training script (VGG16)
 ├── quickstart_vit.py              # ViT quick start script
-├── quickstart_vgg16.py            # VGG16 quick start script
-└── test_*.py                      # Test scripts for various configurations
+├── quickstart_vgg16.py            # VGG16 quick start script (if available)
+├── test_cifar10_vgg16.py          # Test VGG16 on CIFAR-10
+├── test_cifar100_vgg16.py         # Test VGG16 on CIFAR-100
+├── test_cifar100_vit.py           # Test ViT on CIFAR-100
+├── test_privacy.py               # Test privacy mechanisms
+├── test_slack.py                 # Test Slack notifications
+└── test_minimal*.py              # Minimal validation tests
 ```
 
 ## 🔔 Slack Notifications
@@ -289,77 +328,87 @@ Notifications include:
 
 ### Common Issues
 
-1. **GPU Memory Issues**:
+1. **Opacus Hook Errors**:
+   - Error: "Trying to add hooks twice to the same model"
+   - Solution: Automatically handled by hook cleanup in privacy_utils.py
+   - Restart training if issues persist
+
+2. **GPU Memory Issues**:
    - Reduce `batch_size` to 16 or 8
    - Use gradient accumulation if needed
    - Monitor GPU usage with `nvidia-smi`
 
-2. **High Test Loss with DP**: 
-   - Reduce `epsilon` gradually (start with 10-20)
-   - Lower `max_grad_norm` to 0.5
-   - Use AdamW optimizer for better convergence
-
-3. **Slow Convergence**:
-   - Increase `learning_rate` (LoRA allows higher LR)
-   - Increase `client_fraction` to 0.5
-   - Check data distribution with `verbose: true`
-
-4. **ViT-specific Issues**:
-   - Ensure patch_size divides image_size evenly
-   - Adjust embed_dim and depth for smaller datasets
+3. **ViT Convergence Issues**:
    - Use lower learning rate (0.001-0.01) for ViT
+   - Increase training rounds (100-150 for CIFAR-100)
+   - Ensure proper model variant selection (vit_small recommended)
+
+4. **Privacy vs. Accuracy Trade-off**: 
+   - Start with epsilon=8-10 for reasonable privacy/accuracy balance
+   - Adjust `max_grad_norm` (0.5-1.0 typical range)
+   - Consider longer training with privacy enabled
+
+5. **Configuration Issues**:
+   - Verify YAML syntax and file paths
+   - Check that all required fields are present
+   - Use provided config templates as starting points
 
 ## 📈 Advanced Features
 
 ### GPU Acceleration
 The framework automatically detects and utilizes available GPUs:
-```python
-# Automatic GPU detection
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Specify GPU in config
-use_gpu: true
-gpu_id: 0  # For multi-GPU systems
-```
-
-### Optimizer Selection
 ```yaml
-# For stable training (default)
-optimizer: "sgd"
-momentum: 0.9
+# Configuration
+use_gpu: true  # Automatic GPU detection
 
-# For faster convergence with ViT
-optimizer: "adamw"
-betas: [0.9, 0.999]
-weight_decay: 0.05
-```
-
-### Non-IID Data Control
-```yaml
-data_split: "non_iid"
-alpha: 0.1  # Very heterogeneous
-# alpha: 0.5  # Moderately heterogeneous  
-# alpha: 1.0  # Less heterogeneous
-# alpha: 100  # Nearly IID
+# Data loading optimization
+data:
+  num_workers: 2     # Parallel data loading
+  batch_size: 32     # Adjust based on GPU memory
 ```
 
 ### Model Selection
 ```python
-# VGG16 for CIFAR-10
-model = create_model(num_classes=10, model_name='vgg16')
+# VGG16 for CIFAR-10/100
+python main.py --config configs/cifar10_vgg16_base.yaml
 
-# Vision Transformer for CIFAR-100
-model = create_model_vit(num_classes=100, img_size=32, patch_size=4)
+# Vision Transformer variants
+python quickstart_vit.py --model vit_tiny   # Fastest, lower accuracy
+python quickstart_vit.py --model vit_small  # Balanced (recommended)
+python quickstart_vit.py --model vit_base   # Best accuracy, more memory
+```
+
+### Privacy Configuration
+```yaml
+# Conservative privacy (strong protection)
+privacy:
+  enable_privacy: true
+  epsilon: 5.0
+  max_grad_norm: 0.5
+
+# Moderate privacy (balanced)
+privacy:
+  enable_privacy: true  
+  epsilon: 8.0
+  max_grad_norm: 1.0
+
+# Relaxed privacy (minimal protection)
+privacy:
+  enable_privacy: true
+  epsilon: 15.0
+  max_grad_norm: 1.5
 ```
 
 ## 🎯 Key Innovations
 
-1. **Dual Architecture Support**: Both CNN (VGG16) and Transformer (ViT) backends
-2. **GPU-Optimized Privacy**: Efficient DP-SGD implementation with CUDA acceleration
-3. **Selective Parameter Sharing**: Only A-matrices communicated, drastically reducing bandwidth
-4. **Personalization via B-matrices**: Client-specific adaptations preserved locally
-5. **Transfer Learning**: Frozen backbones preserve pre-trained knowledge
-6. **Flexible Architecture**: Supports various optimizers and privacy configurations
+1. **Opacus Integration**: Efficient and reliable DP-SGD using PyTorch's official library
+2. **Automated Hook Management**: Seamless privacy engine setup and cleanup
+3. **Dual Architecture Support**: Both CNN (VGG16) and Transformer (ViT) backends with optimized configurations
+4. **GPU-Optimized Privacy**: Full CUDA acceleration for privacy-preserving training
+5. **YAML Configuration System**: Comprehensive and flexible configuration management
+6. **Selective Parameter Sharing**: Only A-matrices communicated, drastically reducing bandwidth
+7. **Transfer Learning Optimization**: Frozen backbones preserve pre-trained knowledge
+8. **Robust Error Handling**: Automatic recovery from common Opacus and training issues
 
 ## 📚 References
 
