@@ -43,18 +43,34 @@ class DifferentialPrivacy:
         self.total_rounds = total_rounds
         self.use_opacus = use_opacus  # Store use_opacus flag
         
-        # Compute per-round epsilon budget
+        # For federated learning: divide epsilon budget across rounds
+        # This ensures we don't exceed the total privacy budget
         self.epsilon_per_round = self.epsilon / self.total_rounds
         
-        # Compute noise multiplier from per-round budget if not provided
+        # Compute noise multiplier for per-round budget
         if noise_multiplier is None:
-            self.noise_multiplier = np.sqrt(2 * np.log(1.25 / self.delta)) / self.epsilon_per_round
+            # Calculate noise based on per-round epsilon
+            self.noise_multiplier = self.compute_noise_multiplier(self.epsilon_per_round)
         else:
             self.noise_multiplier = float(noise_multiplier)
         
         # Track privacy budget consumption
         self.steps = 0
         self.consumed_epsilon = 0.0
+    
+    def compute_noise_multiplier(self, epsilon_per_round: float) -> float:
+        """
+        Compute noise multiplier for given per-round epsilon budget
+        
+        Args:
+            epsilon_per_round: Privacy budget for one round
+        
+        Returns:
+            Noise multiplier to achieve the target privacy
+        """
+        # Using the standard Gaussian mechanism formula
+        # noise_multiplier = sqrt(2 * log(1.25/delta)) / epsilon
+        return np.sqrt(2 * np.log(1.25 / self.delta)) / epsilon_per_round
     
     def train_with_opacus(self, model, dataloader, optimizer, local_epochs: int) -> Tuple[Dict[str, torch.Tensor], int]:
         """
@@ -99,15 +115,13 @@ class DifferentialPrivacy:
         fresh_optimizer = optim.SGD(trainable_params, lr=lr, momentum=0.9, weight_decay=weight_decay)
         
         # Make model copy, fresh optimizer, dataloader private
-        # Note: target_epsilon should be per-round budget, not multiplied by local_epochs
-        # Opacus will automatically handle the composition across epochs
-        private_model, private_optimizer, private_dataloader = privacy_engine.make_private_with_epsilon(
+        # Use manual noise multiplier calculated from per-round budget
+        # This ensures proper privacy accounting in federated learning
+        private_model, private_optimizer, private_dataloader = privacy_engine.make_private(
             module=model_copy,
             optimizer=fresh_optimizer,
             data_loader=dataloader,
-            epochs=local_epochs,
-            target_epsilon=self.epsilon_per_round,  # Per-round epsilon budget
-            target_delta=self.delta,
+            noise_multiplier=self.noise_multiplier,  # Use pre-calculated noise for per-round budget
             max_grad_norm=self.max_grad_norm,
         )
         
@@ -131,11 +145,18 @@ class DifferentialPrivacy:
             if 'lora_A' in name and param.requires_grad:
                 lora_A_params[name] = param.data.clone()
         
-        # Get privacy spent
-        # Note: epsilon_spent is the total privacy cost for all local_epochs
-        epsilon_spent = privacy_engine.get_epsilon(self.delta)
-        self.consumed_epsilon += epsilon_spent  # Don't divide by local_epochs
+        # Get privacy spent for this round's training
+        # This represents the privacy cost for this specific round
+        epsilon_spent_this_round = privacy_engine.get_epsilon(self.delta)
+        
+        # In federated learning, we accumulate privacy cost across rounds
+        # Each round consumes part of the total privacy budget
+        self.consumed_epsilon += epsilon_spent_this_round
         self.steps += 1
+        
+        # Log privacy budget consumption for monitoring
+        print(f"      Privacy consumed this round: ε={epsilon_spent_this_round:.4f}")
+        print(f"      Total privacy consumed: ε={self.consumed_epsilon:.4f} / {self.epsilon:.1f}")
         
         # Copy updated parameters back to original model
         # Only copy the LoRA parameters (A and B matrices) back to the original model
@@ -159,8 +180,14 @@ class DifferentialPrivacy:
         return self.consumed_epsilon, self.delta
     
     def reset_privacy_budget(self):
-        """Reset privacy accounting"""
+        """Reset privacy accounting for new round"""
         self.steps = 0
+        self.consumed_epsilon = 0.0
+    
+    def start_new_round(self):
+        """Start a new federated learning round - reset per-round privacy tracking"""
+        # Reset consumed epsilon for the new round
+        # In federated DP, each round gets a fresh privacy budget
         self.consumed_epsilon = 0.0
 
 

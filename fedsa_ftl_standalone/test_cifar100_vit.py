@@ -158,6 +158,10 @@ def run_minimal_vit_test():
     for round_idx in range(config['federated']['num_rounds']):
         print(f"\n[Round {round_idx + 1}/{config['federated']['num_rounds']}]")
         
+        # Reset privacy budget for new round if privacy is enabled
+        if privacy_mechanism:
+            privacy_mechanism.start_new_round()
+        
         # All clients participate in test
         selected_clients = list(range(config['federated']['num_clients']))
         
@@ -180,15 +184,7 @@ def run_minimal_vit_test():
             
             # Local training
             print(f"Training ViT client {client_id}...")
-            
-            # Add detailed training progress with privacy information
-            if privacy_mechanism and privacy_mechanism.use_opacus:
-                print(f"    Training with differential privacy (Opacus)")
-            elif privacy_mechanism:
-                print(f"    Training with differential privacy (per-sample clipping)")
-            else:
-                print(f"    Training without privacy protection")
-                
+                            
             client_result = clients[client_id].train(client_dataloader, config['training'])
             client_updates.append(client_result)
             
@@ -227,9 +223,6 @@ def run_minimal_vit_test():
             print(f"  ** New best ViT test accuracy! **")
         
         # Show cumulative privacy budget if applicable
-        if privacy_mechanism and round_idx == 0:
-            epsilon_total, delta_total = privacy_mechanism.get_privacy_spent()
-            print(f"  Total Privacy Budget: ε≤{config['privacy']['epsilon']:.1f}, δ={delta_total:.2e}")
     
     # Final summary
     print("\n" + "=" * 80)

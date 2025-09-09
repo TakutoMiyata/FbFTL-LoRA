@@ -36,7 +36,7 @@ data:
 # Federated learning configuration
 federated:
   num_clients: 10
-  num_rounds: 150  # More rounds for ViT + privacy convergence
+  num_rounds: 100  # More rounds for ViT + privacy convergence
   client_fraction: 0.3  # Fraction of clients selected per round
   checkpoint_freq: 10  # Save checkpoint every N rounds
   save_best_model: true
