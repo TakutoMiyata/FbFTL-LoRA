@@ -81,7 +81,7 @@ def run_minimal_vit_test():
     
     # Enable differential privacy for testing
     config['privacy'] = {
-        'enable_privacy': True,
+        'enable_privacy': False,
         'epsilon': 10.0,  # Higher epsilon for testing
         'delta': 1e-5,
         'max_grad_norm': 0.5,

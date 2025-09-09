@@ -32,18 +32,20 @@ def get_cifar_transforms(model_type='vgg'):
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
     elif model_type == 'vit':
-        # ViT works with 32x32 for CIFAR, use CIFAR normalization
+        # ViT needs 224x224 images to match pre-training conditions
+        # This ensures spatial relationships learned during pre-training are preserved
         transform_train = transforms.Compose([
-            # Keep original 32x32 size for CIFAR
+            transforms.Resize((224, 224)),  # Resize to match pre-training size
             transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(32, padding=4),
+            transforms.RandomRotation(10),
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2435, 0.2616])  # CIFAR stats
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # ImageNet normalization
         ])
         
         transform_test = transforms.Compose([
+            transforms.Resize((224, 224)),  # Resize to match pre-training size
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2435, 0.2616])  # CIFAR stats
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # ImageNet normalization
         ])
     else:
         raise ValueError(f"Unknown model type: {model_type}. Use 'vgg' or 'vit'")

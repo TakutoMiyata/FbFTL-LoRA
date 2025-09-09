@@ -249,9 +249,10 @@ class FedSAFTLModelViT(nn.Module):
         timm_model = timm.create_model(timm_model_name, pretrained=True)
 
         # 2. カスタムViTモデルをインスタンス化
+        # 入力画像を224x224にリサイズしたので、事前学習と同じ設定にする
         self.backbone = VisionTransformer(
-            img_size=32,
-            patch_size=4,
+            img_size=224,  # 事前学習と同じサイズ
+            patch_size=16, # 事前学習と同じパッチサイズ
             embed_dim=embed_dim,
             depth=depth,
             num_heads=num_heads,
@@ -262,53 +263,10 @@ class FedSAFTLModelViT(nn.Module):
         # 3. 事前学習済み重みをカスタムViTに転送
         print("Transferring pre-trained weights to custom ViT model...")
         with torch.no_grad():
-            # cls_token, pos_embed
+            # 事前学習と同じ設定なので直接コピー可能
             self.backbone.cls_token.copy_(timm_model.cls_token)
-            # pos_embedのサイズが異なる場合は補間
-            if self.backbone.pos_embed.shape == timm_model.pos_embed.shape:
-                self.backbone.pos_embed.copy_(timm_model.pos_embed)
-            else:
-                # 位置埋め込みの補間（timmの224x224 → カスタムの32x32）
-                from torch.nn.functional import interpolate
-                pos_embed = timm_model.pos_embed  # [1, 197, embed_dim] (1 cls + 196 patches)
-                cls_pos = pos_embed[:, :1]        # [1, 1, embed_dim] cls token
-                patch_pos = pos_embed[:, 1:]      # [1, 196, embed_dim] patch tokens
-                
-                # timm: 224/16 = 14, patches = 14*14 = 196
-                # custom: 32/4 = 8, patches = 8*8 = 64
-                timm_grid_size = int(patch_pos.shape[1] ** 0.5)  # 14
-                custom_grid_size = int(self.backbone.num_patches ** 0.5)  # 8
-                
-                # patch_posを2Dグリッドに変換して補間
-                patch_pos = patch_pos.reshape(1, timm_grid_size, timm_grid_size, -1).permute(0, 3, 1, 2)
-                patch_pos = interpolate(patch_pos, size=(custom_grid_size, custom_grid_size), mode='bilinear', align_corners=False)
-                patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(1, custom_grid_size * custom_grid_size, -1)
-                
-                # cls tokenと補間したpatch tokenを結合
-                new_pos_embed = torch.cat([cls_pos, patch_pos], dim=1)
-                self.backbone.pos_embed.copy_(new_pos_embed)
-            # patch_embed: サイズが異なるため補間を使用
-            # timmのViT: 224x224, patch_size=16 → (3, 16, 16) -> embed_dim
-            # カスタムViT: 32x32, patch_size=4 → (3, 4, 4) -> embed_dim
-            timm_patch_weight = timm_model.patch_embed.proj.weight  # [embed_dim, 3, 16, 16]
-            custom_patch_weight = self.backbone.patch_embed.weight  # [embed_dim, 3, 4, 4]
-            
-            # パッチサイズが異なる場合は補間
-            if timm_patch_weight.shape != custom_patch_weight.shape:
-                # 各チャンネルごとに補間
-                from torch.nn.functional import interpolate
-                # [embed_dim, 3, 16, 16] -> [embed_dim, 3, 4, 4]
-                resized_weight = interpolate(
-                    timm_patch_weight, 
-                    size=(custom_patch_weight.shape[2], custom_patch_weight.shape[3]), 
-                    mode='bilinear', 
-                    align_corners=False
-                )
-                self.backbone.patch_embed.weight.copy_(resized_weight)
-            else:
-                self.backbone.patch_embed.weight.copy_(timm_patch_weight)
-            
-            # バイアスは直接コピー可能
+            self.backbone.pos_embed.copy_(timm_model.pos_embed)
+            self.backbone.patch_embed.weight.copy_(timm_model.patch_embed.proj.weight)
             if hasattr(timm_model.patch_embed.proj, 'bias') and timm_model.patch_embed.proj.bias is not None:
                 self.backbone.patch_embed.bias.copy_(timm_model.patch_embed.proj.bias)
             # transformer blocks
