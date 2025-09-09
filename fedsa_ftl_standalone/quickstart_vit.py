@@ -189,16 +189,20 @@ def main():
         # Evaluation
         if (round_idx + 1) % config.get('evaluation', {}).get('eval_freq', 5) == 0:
             print("\nEvaluating ViT models...")
+            test_results = []
             test_accuracies = []
             for client_id in selected_clients:
                 test_result = clients[client_id].evaluate(test_dataloader)
+                test_results.append(test_result)
                 test_accuracies.append(test_result['accuracy'])
                 print(f"  Client {client_id} test accuracy: {test_result['accuracy']:.2f}%")
+            client_test_results = test_results
         else:
             test_accuracies = [0] * len(selected_clients)  # Placeholder
+            # Create proper test results with both accuracy and loss keys
+            client_test_results = [{'accuracy': 0, 'loss': 0} for _ in selected_clients]
         
         # Server aggregation
-        client_test_results = [{'accuracy': acc} for acc in test_accuracies]
         round_stats = server.federated_round(client_updates, client_test_results)
         
         # Print summary
