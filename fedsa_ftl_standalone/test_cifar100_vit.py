@@ -28,8 +28,8 @@ class ViTFedSAFTLClient(FedSAFTLClient):
     Inherits from existing client but uses ViT model creation
     """
     
-    def __init__(self, client_id, model, device, privacy_config=None):
-        super().__init__(client_id, model, device, privacy_config)
+    def __init__(self, client_id, model, device, privacy_mechanism=None):
+        super().__init__(client_id, model, device, privacy_mechanism)
         # All existing functionality is inherited
 
 
@@ -108,7 +108,8 @@ def run_minimal_vit_test():
     test_dataloader = torch.utils.data.DataLoader(
         testset, 
         batch_size=config['data']['batch_size'], 
-        shuffle=False
+        shuffle=False,
+        num_workers=config['data'].get('num_workers', 0)
     )
     
     # Initialize server
@@ -170,7 +171,8 @@ def run_minimal_vit_test():
                 trainset, 
                 client_indices[client_id],
                 config['data']['batch_size'],
-                shuffle=True
+                shuffle=True,
+                num_workers=config['data'].get('num_workers', 0)
             )
             
             # Update with global A matrices if available
@@ -180,8 +182,22 @@ def run_minimal_vit_test():
             
             # Local training
             print(f"Training ViT client {client_id}...")
+            
+            # Add detailed training progress with privacy information
+            if privacy_mechanism and privacy_mechanism.use_opacus:
+                print(f"    Training with differential privacy (Opacus)")
+            elif privacy_mechanism:
+                print(f"    Training with differential privacy (per-sample clipping)")
+            else:
+                print(f"    Training without privacy protection")
+                
             client_result = clients[client_id].train(client_dataloader, config['training'])
             client_updates.append(client_result)
+            
+            # Show privacy budget if applicable
+            if privacy_mechanism:
+                epsilon_spent, delta = privacy_mechanism.get_privacy_spent()
+                print(f"    Privacy budget spent: ε={epsilon_spent:.2f}, δ={delta:.2e}")
             
             print(f"  Client {client_id} - Loss: {client_result['loss']:.4f}, "
                   f"Accuracy: {client_result['accuracy']:.2f}%")
@@ -200,21 +216,39 @@ def run_minimal_vit_test():
         
         # Print round summary
         avg_test_accuracy = round_stats.get('test_accuracy', 0)
+        avg_train_accuracy = round_stats.get('train_accuracy', 0)
+        communication_cost = round_stats.get('communication_cost_mb', 0)
+        
         print(f"\nRound {round_idx + 1} Summary (ViT):")
-        print(f"  Average Training Accuracy: {round_stats['train_accuracy']:.2f}%")
+        print(f"  Average Training Accuracy: {avg_train_accuracy:.2f}%")
         print(f"  Average Test Accuracy: {avg_test_accuracy:.2f}%")
-        print(f"  Communication Cost: {round_stats['communication_cost_mb']:.2f} MB")
+        print(f"  Communication Cost: {communication_cost:.2f} MB")
         
         if avg_test_accuracy > best_accuracy:
             best_accuracy = avg_test_accuracy
             print(f"  ** New best ViT test accuracy! **")
+        
+        # Show cumulative privacy budget if applicable
+        if privacy_mechanism and round_idx == 0:
+            epsilon_total, delta_total = privacy_mechanism.get_privacy_spent()
+            print(f"  Total Privacy Budget: ε≤{config['privacy']['epsilon']:.1f}, δ={delta_total:.2e}")
     
     # Final summary
     print("\n" + "=" * 80)
     print("ViT Test Complete!")
     print("=" * 80)
+    print(f"Configuration: CIFAR-100 + {config['model']['model_name']} + LoRA")
+    print(f"Privacy: {'Enabled (ε=' + str(config['privacy']['epsilon']) + ')' if config.get('privacy', {}).get('enable_privacy') else 'Disabled'}")
     print(f"Best ViT Test Accuracy: {best_accuracy:.2f}%")
+    print(f"Total Rounds: {config['federated']['num_rounds']}")
     print(f"Total Communication: {sum(server.history['communication_cost']) / (1024 * 1024):.2f} MB")
+    
+    # Show final privacy budget if applicable
+    if privacy_mechanism:
+        final_epsilon, final_delta = privacy_mechanism.get_privacy_spent()
+        print(f"Final Privacy Budget Used: ε={final_epsilon:.2f}, δ={final_delta:.2e}")
+    
+    print("=" * 80)
     
     return best_accuracy
 
@@ -264,15 +298,30 @@ if __name__ == "__main__":
         # Run ViT test
         best_accuracy = run_minimal_vit_test()
         
-        # Success criteria (similar to VGG16 test)
-        if best_accuracy > 15:  # Expect at least 15% for quick test on 100 classes
-            print("\n✅ ViT Test PASSED: Model is learning successfully!")
-            print(f"Note: CIFAR-100 is challenging with 100 classes vs 10 in CIFAR-10")
-            print(f"Random guessing would be 1%, so {best_accuracy:.1f}% shows significant learning.")
+        # Success criteria (adjusted for differential privacy)
+        privacy_enabled = config.get('privacy', {}).get('enable_privacy', False)
+        if privacy_enabled:
+            # Lower threshold when privacy is enabled due to accuracy trade-off
+            threshold = 8  # Expect at least 8% with privacy on CIFAR-100
+            if best_accuracy > threshold:
+                print("\n✅ ViT Test PASSED: Model is learning successfully with differential privacy!")
+                print(f"Note: CIFAR-100 with DP is very challenging (100 classes + privacy noise)")
+                print(f"Random guessing: 1%, Current: {best_accuracy:.1f}% - shows significant learning despite privacy constraints.")
+            else:
+                print("\n⚠️ ViT Test WARNING: Accuracy is lower than expected with privacy enabled.")
+                print("This might be due to strong privacy constraints or minimal training setup.")
+                print("ViT models with DP typically need more rounds and careful hyperparameter tuning.")
         else:
-            print("\n⚠️ ViT Test WARNING: Accuracy is lower than expected.")
-            print("This might be due to the minimal training setup (only 5 rounds).")
-            print("ViT models typically need more rounds to converge than CNNs.")
+            # Higher threshold when privacy is disabled
+            threshold = 15
+            if best_accuracy > threshold:
+                print("\n✅ ViT Test PASSED: Model is learning successfully!")
+                print(f"Note: CIFAR-100 is challenging with 100 classes vs 10 in CIFAR-10")
+                print(f"Random guessing would be 1%, so {best_accuracy:.1f}% shows significant learning.")
+            else:
+                print("\n⚠️ ViT Test WARNING: Accuracy is lower than expected.")
+                print("This might be due to the minimal training setup (only 5 rounds).")
+                print("ViT models typically need more rounds to converge than CNNs.")
         
     except Exception as e:
         print(f"\n❌ ViT Test FAILED with error: {e}")

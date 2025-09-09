@@ -41,6 +41,7 @@ class DifferentialPrivacy:
         self.delta = float(delta)
         self.max_grad_norm = float(max_grad_norm)
         self.total_rounds = total_rounds
+        self.use_opacus = use_opacus  # Store use_opacus flag
         
         # Compute per-round epsilon budget
         self.epsilon_per_round = self.epsilon / self.total_rounds
