@@ -75,14 +75,55 @@ class DifferentialPrivacy:
         """
         device = next(model.parameters()).device
         
+        # Create a deep copy of the model to avoid hook conflicts
+        import copy
+        model_copy = copy.deepcopy(model)
+        
+        # Remove any existing hooks from the model copy
+        try:
+            # Check if model already has Opacus hooks and remove them
+            if hasattr(model_copy, '_forward_hooks'):
+                model_copy._forward_hooks.clear()
+            if hasattr(model_copy, '_backward_hooks'):
+                model_copy._backward_hooks.clear()
+            if hasattr(model_copy, '_forward_pre_hooks'):
+                model_copy._forward_pre_hooks.clear()
+            if hasattr(model_copy, '_backward_pre_hooks'):
+                model_copy._backward_pre_hooks.clear()
+            
+            # Remove Opacus-specific attributes if they exist
+            opacus_attrs = ['_grad_sample_module_mode', '_hooks_mode', 'autograd_grad_sample']
+            for attr in opacus_attrs:
+                if hasattr(model_copy, attr):
+                    delattr(model_copy, attr)
+            
+            # Also clear hooks from all submodules
+            for module in model_copy.modules():
+                if hasattr(module, '_forward_hooks'):
+                    module._forward_hooks.clear()
+                if hasattr(module, '_backward_hooks'):
+                    module._backward_hooks.clear()
+                if hasattr(module, '_forward_pre_hooks'):
+                    module._forward_pre_hooks.clear()
+                if hasattr(module, '_backward_pre_hooks'):
+                    module._backward_pre_hooks.clear()
+                
+                # Remove Opacus-specific attributes from submodules
+                for attr in opacus_attrs:
+                    if hasattr(module, attr):
+                        delattr(module, attr)
+                        
+        except Exception as e:
+            print(f"Warning: Could not clear existing hooks: {e}")
+        
         # Create new privacy engine for this training session
         privacy_engine = PrivacyEngine()
         
-        # Make model, optimizer, dataloader private
+        # Make model copy, optimizer, dataloader private
         # Note: target_epsilon should be per-round budget, not multiplied by local_epochs
         # Opacus will automatically handle the composition across epochs
         private_model, private_optimizer, private_dataloader = privacy_engine.make_private_with_epsilon(
-            module=model,
+            module=model_copy,
             optimizer=optimizer,
             data_loader=dataloader,
             epochs=local_epochs,
