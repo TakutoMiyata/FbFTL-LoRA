@@ -18,8 +18,7 @@ class FedSAFTLClient:
     FedSA-FTL Client for local training
     """
     
-    def __init__(self, client_id: int, model: nn.Module, device: torch.device = None,
-                 privacy_mechanism: Optional[DifferentialPrivacy] = None):
+    def __init__(self, client_id: int, model: nn.Module, device: torch.device = None):
         """
         Initialize FedSA-FTL client
         
@@ -38,6 +37,10 @@ class FedSAFTLClient:
         self.personalized_B_matrices = None
         
         # Privacy mechanism
+        self.privacy_mechanism = None
+
+    def set_privacy_mechanism(self, privacy_mechanism):
+        """学習直前にDPメカニズムを設定する"""
         self.privacy_mechanism = privacy_mechanism
         
     def train(self, dataloader: DataLoader, config: Dict) -> Dict:

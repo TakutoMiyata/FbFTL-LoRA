@@ -9,9 +9,11 @@ import argparse
 import yaml
 from pathlib import Path
 import os
+import sys
+import numpy as np
+import random
 
 # Add src directory to path
-import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 # Now import from src modules
@@ -19,13 +21,17 @@ from fedsa_ftl_model_vit import create_model_vit
 from fedsa_ftl_client import FedSAFTLClient
 from fedsa_ftl_server import FedSAFTLServer
 from data_utils import prepare_federated_data, get_client_dataloader
+from privacy_utils import DifferentialPrivacy
 
 
 class ViTFedSAFTLClient(FedSAFTLClient):
     """Extended client for ViT models"""
     
-    def __init__(self, client_id, model, device, privacy_config=None):
-        super().__init__(client_id, model, device, privacy_config)
+    def __init__(self, client_id, model, device, privacy_mechanism=None):
+        super().__init__(client_id, model, device)
+        # privacy_mechanismをセッターで設定
+        if privacy_mechanism is not None:
+            self.set_privacy_mechanism(privacy_mechanism)
 
 
 def main():
@@ -82,7 +88,6 @@ def main():
     # Set seed
     if 'seed' in config:
         torch.manual_seed(config['seed'])
-        import numpy as np
         np.random.seed(config['seed'])
     
     # Prepare data
@@ -121,23 +126,26 @@ def main():
     print(f"\nCreating {config['federated']['num_clients']} ViT federated clients...")
     clients = []
     
-    # Create privacy mechanism if enabled
-    privacy_mechanism = None
-    if config.get('privacy', {}).get('enable_privacy', False):
-        from privacy_utils import DifferentialPrivacy
-        privacy_mechanism = DifferentialPrivacy(
-            epsilon=config['privacy'].get('epsilon', 10.0),
-            delta=config['privacy'].get('delta', 1e-5),
-            max_grad_norm=config['privacy'].get('max_grad_norm', 0.5)
-        )
+    # DPが有効かどうかをループの前に一度だけチェック
+    privacy_enabled = config.get('privacy', {}).get('enable_privacy', False)
     
     for client_id in range(config['federated']['num_clients']):
+        privacy_mechanism = None
+        # ループ内でクライアントごとに新しいインスタンスを生成
+        if privacy_enabled:
+            privacy_mechanism = DifferentialPrivacy(
+                epsilon=config['privacy'].get('epsilon', 10.0),
+                delta=config['privacy'].get('delta', 1e-5),
+                max_grad_norm=config['privacy'].get('max_grad_norm', 0.5),
+                total_rounds=config['federated'].get('num_rounds', 100)
+            )
+        
         client_model = create_model_vit(config['model'])
         client = ViTFedSAFTLClient(
             client_id, 
             client_model, 
             device,
-            privacy_mechanism
+            privacy_mechanism  # 各クライアントに固有のオブジェクトを渡す
         )
         clients.append(client)
     
@@ -152,7 +160,6 @@ def main():
         print(f"\n[Round {round_idx + 1}/{config['federated']['num_rounds']}]")
         
         # Select clients
-        import random
         num_selected = max(1, int(config['federated']['num_clients'] * 
                                   config['federated']['client_fraction']))
         selected_clients = random.sample(range(config['federated']['num_clients']), 
