@@ -129,15 +129,34 @@ class DifferentialPrivacy:
         private_model.train()
         criterion = torch.nn.CrossEntropyLoss().to(device)
         
+        from tqdm import tqdm
+        
         for epoch in range(local_epochs):
-            for batch_idx, (images, labels) in enumerate(private_dataloader):
-                images, labels = images.to(device), labels.to(device)
-                
-                private_optimizer.zero_grad()
-                outputs = private_model(images)
-                loss = criterion(outputs, labels)
-                loss.backward()
-                private_optimizer.step()
+            epoch_loss = 0
+            epoch_correct = 0
+            epoch_total = 0
+            
+            with tqdm(private_dataloader, desc=f"DP Training Epoch {epoch+1}/{local_epochs}") as pbar:
+                for batch_idx, (images, labels) in enumerate(pbar):
+                    images, labels = images.to(device), labels.to(device)
+                    
+                    private_optimizer.zero_grad()
+                    outputs = private_model(images)
+                    loss = criterion(outputs, labels)
+                    loss.backward()
+                    private_optimizer.step()
+                    
+                    # Calculate metrics for progress bar
+                    epoch_loss += loss.item()
+                    _, predicted = outputs.max(1)
+                    epoch_total += labels.size(0)
+                    epoch_correct += predicted.eq(labels).sum().item()
+                    
+                    # Update progress bar
+                    pbar.set_postfix({
+                        'loss': epoch_loss / (batch_idx + 1),
+                        'acc': 100. * epoch_correct / epoch_total
+                    })
         
         # Extract updated LoRA A parameters
         lora_A_params = {}
