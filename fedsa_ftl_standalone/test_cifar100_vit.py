@@ -74,14 +74,17 @@ def run_minimal_vit_test():
         },
         'training': {
             'local_epochs': 2,  # Fewer epochs for testing
+            'optimizer': 'adamw',  # Use AdamW optimizer for ViT
             'learning_rate': 0.001,  # Lower learning rate for ViT stability
-            'weight_decay': 0.0001  # Lower weight decay for ViT
+            'weight_decay': 0.0001,  # Lower weight decay for ViT
+            'betas': [0.9, 0.999],  # Adam beta parameters
+            'eps': 1e-8  # Adam epsilon parameter
         }
     }
     
     # Enable differential privacy for testing
     config['privacy'] = {
-        'enable_privacy': False,
+        'enable_privacy': True,
         'epsilon': 10.0,  # Higher epsilon for testing
         'delta': 1e-5,
         'max_grad_norm': 0.5,
@@ -131,10 +134,26 @@ def run_minimal_vit_test():
     print(f"\nCreating {config['federated']['num_clients']} ViT clients...")
     clients = []
     
-    # クライアントをprivacy_mechanismなしで生成
+    # ★★★ 修正箇所：ループの外でクライアントごとにDPインスタンスを作成 ★★★
+    privacy_mechanisms = []
+    if config.get('privacy', {}).get('enable_privacy', False):
+        for _ in range(config['federated']['num_clients']):
+            pm = DifferentialPrivacy(
+                epsilon=config['privacy']['epsilon'],
+                delta=config['privacy']['delta'],
+                max_grad_norm=config['privacy']['max_grad_norm'],
+                total_rounds=config['federated']['num_rounds']
+            )
+            privacy_mechanisms.append(pm)
+    else:
+        # DPが無効な場合はNoneのリストを作成
+        privacy_mechanisms = [None] * config['federated']['num_clients']
+
     for client_id in range(config['federated']['num_clients']):
         client_model = create_model_vit(config['model'])
         client = ViTFedSAFTLClient(client_id, client_model, device)
+        # ★★★ 修正箇所：クライアントに永続的なDPメカニズムをセット ★★★
+        client.set_privacy_mechanism(privacy_mechanisms[client_id])
         clients.append(client)
     
     # Training loop
@@ -145,16 +164,6 @@ def run_minimal_vit_test():
     
     for round_idx in range(config['federated']['num_rounds']):
         print(f"\n[Round {round_idx + 1}/{config['federated']['num_rounds']}]")
-        
-        # ラウンドごとに1回だけDPインスタンスを生成（効率化）
-        privacy_mechanism = None
-        if config.get('privacy', {}).get('enable_privacy', False):
-            privacy_mechanism = DifferentialPrivacy(
-                epsilon=config['privacy']['epsilon'],
-                delta=config['privacy']['delta'],
-                max_grad_norm=config['privacy']['max_grad_norm'],
-                total_rounds=config['federated']['num_rounds']
-            )
         
         # All clients participate in test
         selected_clients = list(range(config['federated']['num_clients']))
@@ -178,8 +187,7 @@ def run_minimal_vit_test():
             
             # Local training
             print(f"Training ViT client {client_id}...")
-            # 事前に生成したDPインスタンスをセット（クライアントごとの繰り返し処理を削減）
-            clients[client_id].set_privacy_mechanism(privacy_mechanism)
+            # ★★★ 削除箇所：DPインスタンスのセットは不要（既にクライアント作成時にセット済み） ★★★
             client_result = clients[client_id].train(client_dataloader, config['training'])
             client_updates.append(client_result)
             print(f"  Client {client_id} - Loss: {client_result['loss']:.4f}, "
@@ -222,6 +230,14 @@ def run_minimal_vit_test():
     print(f"Best ViT Test Accuracy: {best_accuracy:.2f}%")
     print(f"Total Rounds: {config['federated']['num_rounds']}")
     print(f"Total Communication: {sum(server.history['communication_cost']) / (1024 * 1024):.2f} MB")
+    
+    # Show final privacy budget consumption if privacy is enabled
+    if config.get('privacy', {}).get('enable_privacy', False):
+        print("\nFinal Privacy Budget Consumption:")
+        for client_id in range(config['federated']['num_clients']):
+            if privacy_mechanisms[client_id] is not None:
+                epsilon_spent, delta = privacy_mechanisms[client_id].get_privacy_spent()
+                print(f"  Client {client_id}: ε={epsilon_spent:.4f}, δ={delta:.2e}")
     
     print("=" * 80)
     
