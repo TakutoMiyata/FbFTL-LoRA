@@ -73,10 +73,10 @@ def run_minimal_vit_test():
             'aggregation_method': 'fedavg'
         },
         'training': {
-            'local_epochs': 2,  # Fewer epochs for testing
+            'local_epochs': 3,  # エポック数を少し増やす
             'optimizer': 'adamw',  # Use AdamW optimizer for ViT
-            'learning_rate': 0.001,  # Lower learning rate for ViT stability
-            'weight_decay': 0.0001,  # Lower weight decay for ViT
+            'learning_rate': 0.0001,  # 推奨学習率 (1e-4)
+            'weight_decay': 0.01,  # AdamW向けに調整
             'betas': [0.9, 0.999],  # Adam beta parameters
             'eps': 1e-8  # Adam epsilon parameter
         }

@@ -104,22 +104,12 @@ class DifferentialPrivacy:
         # Create new privacy engine for this training session
         privacy_engine = PrivacyEngine()
         
-        # Create a new optimizer for the copied model
-        import torch.optim as optim
-        # Get learning rate and weight decay from the training config
-        lr = 0.001  # Default learning rate for ViT
-        weight_decay = 0.0001  # Default weight decay for ViT
-        
-        # Create fresh optimizer for the copied model
-        trainable_params = [p for p in model_copy.parameters() if p.requires_grad]
-        fresh_optimizer = optim.SGD(trainable_params, lr=lr, momentum=0.9, weight_decay=weight_decay)
-        
-        # Make model copy, fresh optimizer, dataloader private
-        # Use manual noise multiplier calculated from per-round budget
-        # This ensures proper privacy accounting in federated learning
+        # Make model copy, optimizer, dataloader private
+        # ★★★ 修正：引数で渡されたoptimizerをそのまま使用 ★★★
+        # Opacusは新しいオプティマイザを内部で作成するため、元のオプティマイザのパラメータを引き継がせる
         private_model, private_optimizer, private_dataloader = privacy_engine.make_private(
             module=model_copy,
-            optimizer=fresh_optimizer,
+            optimizer=optimizer,  # ★★★ fresh_optimizerではなくoptimizerを使用
             data_loader=dataloader,
             noise_multiplier=self.noise_multiplier,  # Use pre-calculated noise for per-round budget
             max_grad_norm=self.max_grad_norm,
