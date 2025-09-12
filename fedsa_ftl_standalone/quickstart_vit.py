@@ -296,7 +296,6 @@ def main():
         
         # Print summary
         avg_train_acc = sum(train_accuracies) / len(train_accuracies)
-        avg_test_acc = sum(test_accuracies) / len(test_accuracies) if any(test_accuracies) else 0
         
         print(f"\nRound {round_idx + 1} Summary:")
         print(f"  Avg Training Accuracy: {avg_train_acc:.2f}%")
@@ -315,11 +314,9 @@ def main():
             'timestamp': datetime.now().isoformat(),
             'selected_clients': selected_clients,
             'avg_train_accuracy': avg_train_acc,
-            'avg_test_accuracy': avg_test_acc,
             'avg_personalized_accuracy': avg_personalized_acc if any(test_accuracies) else 0,
             'individual_train_accuracies': train_accuracies,
             'individual_test_accuracies': test_accuracies if any(test_accuracies) else [],
-            'individual_personalized_accuracies': personalized_accuracies if 'personalized_accuracies' in locals() and any(test_accuracies) else [],
             'communication_cost_mb': round_stats.get('communication_cost_mb', 0),
             'is_best_round': avg_personalized_acc > best_accuracy if any(test_accuracies) else False
         }
@@ -348,7 +345,7 @@ def main():
             # Prepare round stats for notification
             round_stats_for_notification = {
                 'train_accuracy': avg_train_acc,
-                'test_accuracy': avg_test_acc,
+                'test_accuracy': avg_personalized_acc,
                 'communication_cost_mb': round_stats.get('communication_cost_mb', 0)
             }
             
@@ -373,7 +370,7 @@ def main():
                 'round': round_idx + 1,
                 'best_accuracy': best_accuracy,
                 'best_round': best_round,
-                'current_accuracy': avg_test_acc,
+                'current_accuracy': avg_personalized_acc,
                 'recent_rounds': results['rounds'][-10:]  # Last 10 rounds
             }
             
@@ -398,7 +395,7 @@ def main():
         'best_round': best_round,
         'total_rounds': config['federated']['num_rounds'],
         'total_communication_mb': sum(server.history['communication_cost']) / (1024 * 1024),
-        'final_avg_accuracy': avg_test_acc,
+        'final_avg_accuracy': avg_personalized_acc if 'avg_personalized_acc' in locals() else 0,
         'training_duration_hours': training_duration / 3600,
         'model_name': config['model']['model_name'],
         'dataset': config['data']['dataset_name']
@@ -423,7 +420,7 @@ def main():
             df_data.append({
                 'round': round_data['round'],
                 'train_accuracy': round_data['avg_train_accuracy'],
-                'test_accuracy': round_data['avg_test_accuracy'],
+                'test_accuracy': round_data['avg_personalized_accuracy'],
                 'communication_mb': round_data['communication_cost_mb'],
                 'is_best': round_data['is_best_round']
             })
@@ -472,7 +469,7 @@ def main():
         }
         
         summary_for_notification = {
-            'final_avg_accuracy': avg_test_acc,
+            'final_avg_accuracy': avg_personalized_acc if 'avg_personalized_acc' in locals() else 0,
             'final_std_accuracy': 0,  # Can calculate from individual client results if needed
             'best_test_accuracy': best_accuracy,
             'total_rounds': config['federated']['num_rounds'],
