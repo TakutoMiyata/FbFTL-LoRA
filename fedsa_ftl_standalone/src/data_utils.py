@@ -210,7 +210,7 @@ def prepare_federated_data(config: Dict):
         config: Configuration dictionary
     
     Returns:
-        trainset, testset, client_indices
+        trainset, testset, client_train_indices, client_test_indices
     """
     # Set random seed for reproducibility
     np.random.seed(config.get('seed', 42))
@@ -229,14 +229,25 @@ def prepare_federated_data(config: Dict):
     num_clients = config.get('num_clients', 10)
     data_split = config.get('data_split', 'non_iid')
     
+    # Create train splits
     if data_split == 'non_iid':
         alpha = config.get('alpha', 0.5)
-        client_indices = create_non_iid_splits(trainset, num_clients, alpha)
+        client_train_indices = create_non_iid_splits(trainset, num_clients, alpha)
+        # Create test splits with the same distribution
+        # Use a different seed offset to ensure different samples but same distribution
+        np.random.seed(config.get('seed', 42) + 1000)
+        client_test_indices = create_non_iid_splits(testset, num_clients, alpha)
+        # Reset seed
+        np.random.seed(config.get('seed', 42))
     else:
-        client_indices = create_iid_splits(trainset, num_clients)
+        client_train_indices = create_iid_splits(trainset, num_clients)
+        client_test_indices = create_iid_splits(testset, num_clients)
     
     # Analyze distribution if verbose
     if config.get('verbose', False):
-        analyze_data_distribution(trainset, client_indices, num_classes)
+        print("\n=== Training Data Distribution ===")
+        analyze_data_distribution(trainset, client_train_indices, num_classes)
+        print("\n=== Test Data Distribution ===")
+        analyze_data_distribution(testset, client_test_indices, num_classes)
     
-    return trainset, testset, client_indices
+    return trainset, testset, client_train_indices, client_test_indices

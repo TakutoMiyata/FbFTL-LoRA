@@ -126,7 +126,7 @@ def main():
     print("\nPreparing federated data...")
     # Ensure ViT-specific transforms are used
     config['data']['model_type'] = 'vit'
-    trainset, testset, client_indices = prepare_federated_data(config['data'])
+    trainset, testset, client_train_indices, client_test_indices = prepare_federated_data(config['data'])
     
     # Create test dataloader
     test_dataloader = torch.utils.data.DataLoader(
@@ -224,11 +224,9 @@ def main():
     for round_idx in range(config['federated']['num_rounds']):
         print(f"\n[Round {round_idx + 1}/{config['federated']['num_rounds']}]")
         
-        # Select clients
-        num_selected = max(1, int(config['federated']['num_clients'] * 
-                                  config['federated']['client_fraction']))
-        selected_clients = random.sample(range(config['federated']['num_clients']), 
-                                       num_selected)
+        # Select ALL clients for participation (full client participation)
+        # This ensures all clients participate in every round for accurate personalized evaluation
+        selected_clients = list(range(config['federated']['num_clients']))
         
         print(f"Selected clients: {selected_clients}")
         
@@ -237,10 +235,10 @@ def main():
         train_accuracies = []
         
         for client_id in selected_clients:
-            # Get client data
+            # Get client training data
             client_dataloader = get_client_dataloader(
                 trainset,
-                client_indices[client_id],
+                client_train_indices[client_id],
                 config['data']['batch_size'],
                 shuffle=True
             )
@@ -260,17 +258,36 @@ def main():
         
         # Evaluation
         if (round_idx + 1) % config.get('evaluation', {}).get('eval_freq', 5) == 0:
-            print("\nEvaluating ViT models...")
-            test_results = []
-            test_accuracies = []
+            print("\nEvaluating models...")
+            
+            # 1. Personalized Accuracy: Each client evaluates on their LOCAL test data
+            print("  Personalized Accuracy (local test data):")
+            personalized_results = []
+            personalized_accuracies = []
             for client_id in selected_clients:
-                test_result = clients[client_id].evaluate(test_dataloader)
-                test_results.append(test_result)
-                test_accuracies.append(test_result['accuracy'])
-                print(f"  Client {client_id} test accuracy: {test_result['accuracy']:.2f}%")
-            client_test_results = test_results
+                # Get client's LOCAL test data
+                client_test_dataloader = get_client_dataloader(
+                    testset,
+                    client_test_indices[client_id],
+                    config['data']['batch_size'],
+                    shuffle=False
+                )
+                # Evaluate personalized model (A * B_i) on local test data
+                test_result = clients[client_id].evaluate(client_test_dataloader)
+                personalized_results.append(test_result)
+                personalized_accuracies.append(test_result['accuracy'])
+                print(f"    Client {client_id}: {test_result['accuracy']:.2f}%")
+            
+            avg_personalized_acc = sum(personalized_accuracies) / len(personalized_accuracies)
+            print(f"  Average Personalized Accuracy: {avg_personalized_acc:.2f}%")
+            
+            # Use personalized results for server aggregation
+            client_test_results = personalized_results
+            test_accuracies = personalized_accuracies
         else:
             test_accuracies = [0] * len(selected_clients)  # Placeholder
+            personalized_accuracies = [0] * len(selected_clients)
+            avg_personalized_acc = 0
             # Create proper test results with both accuracy and loss keys
             client_test_results = [{'accuracy': 0, 'loss': 0} for _ in selected_clients]
         
@@ -284,11 +301,12 @@ def main():
         print(f"\nRound {round_idx + 1} Summary:")
         print(f"  Avg Training Accuracy: {avg_train_acc:.2f}%")
         if any(test_accuracies):
-            print(f"  Avg Test Accuracy: {avg_test_acc:.2f}%")
-            if avg_test_acc > best_accuracy:
-                best_accuracy = avg_test_acc
+            print(f"  Avg Personalized Test Accuracy: {avg_personalized_acc:.2f}%")
+            # Track best PERSONALIZED accuracy as the main metric
+            if avg_personalized_acc > best_accuracy:
+                best_accuracy = avg_personalized_acc
                 best_round = round_idx + 1
-                print(f"  ** New best ViT accuracy! **")
+                print(f"  ** New best personalized accuracy! **")
         print(f"  Communication Cost: {round_stats.get('communication_cost_mb', 0):.2f} MB")
         
         # Save round results
@@ -298,10 +316,12 @@ def main():
             'selected_clients': selected_clients,
             'avg_train_accuracy': avg_train_acc,
             'avg_test_accuracy': avg_test_acc,
+            'avg_personalized_accuracy': avg_personalized_acc if any(test_accuracies) else 0,
             'individual_train_accuracies': train_accuracies,
             'individual_test_accuracies': test_accuracies if any(test_accuracies) else [],
+            'individual_personalized_accuracies': personalized_accuracies if 'personalized_accuracies' in locals() and any(test_accuracies) else [],
             'communication_cost_mb': round_stats.get('communication_cost_mb', 0),
-            'is_best_round': avg_test_acc > best_accuracy if any(test_accuracies) else False
+            'is_best_round': avg_personalized_acc > best_accuracy if any(test_accuracies) else False
         }
         results['rounds'].append(round_result)
         
@@ -429,7 +449,7 @@ def main():
     print("=" * 80)
     print(f"Configuration: {config_path.name}")
     print(f"Model: {config['model']['model_name']}")
-    print(f"Best Test Accuracy: {best_accuracy:.2f}% (Round {best_round})")
+    print(f"Best Personalized Accuracy: {best_accuracy:.2f}% (Round {best_round})")
     print(f"Total Rounds: {config['federated']['num_rounds']}")
     print(f"Total Communication: {sum(server.history['communication_cost']) / (1024 * 1024):.2f} MB")
     print(f"Training Duration: {training_duration / 3600:.2f} hours")
