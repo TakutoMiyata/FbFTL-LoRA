@@ -1,0 +1,154 @@
+# Optimized configuration for CIFAR-100 ViT federated learning
+# Based on recommendations to reduce overfitting and improve performance
+
+# Random seed for reproducibility
+seed: 42
+
+# GPU usage
+use_gpu: true
+
+# Experiment settings
+experiment:
+  name: "fedsa_ftl_cifar100_vit_optimized"
+  description: "Optimized FedSA-FTL with ViT on CIFAR-100 - reduced overfitting"
+  output_dir: "experiments/fedsa_ftl_cifar100_vit_optimized"
+
+# Model configuration
+model:
+  num_classes: 100
+  model_name: "vit_small"  # Options: vit_tiny, vit_small, vit_base
+  
+  # LoRA configuration - try different r values for communication/accuracy tradeoff
+  lora_r: 8  # Reduced from 16 to decrease communication and overfitting
+  lora_alpha: 16
+  lora_dropout: 0.1
+  
+  # Freezing strategy
+  freeze_backbone: true
+  pretrained: false  # Set to true if using pretrained weights
+
+# Data configuration
+data:
+  dataset_name: "cifar100"
+  data_dir: "./data"
+  batch_size: 32
+  num_workers: 2
+  
+  # Non-IID split
+  data_split: "non_iid"
+  alpha: 0.5  # Dirichlet parameter
+  
+  # Model type for appropriate transforms
+  model_type: "vit"
+  
+  # Data augmentation settings (to be implemented)
+  augmentations:
+    random_crop:
+      enabled: true
+      size: 32
+      padding: 4
+    horizontal_flip:
+      enabled: true
+      prob: 0.5
+    color_jitter:
+      enabled: true
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.1
+    random_rotation:
+      enabled: true
+      degrees: 15
+    # Mixup/CutMix (choose one, requires implementation)
+    mixup:
+      enabled: false
+      alpha: 0.2
+      prob: 0.5
+    cutmix:
+      enabled: false
+      alpha: 1.0
+      prob: 0.5
+  
+  verbose: true
+
+# Federated learning settings
+federated:
+  num_clients: 10
+  num_rounds: 100
+  
+  # Client sampling - crucial for realistic FL and preventing overfitting
+  client_fraction: 0.3  # Sample 30% of clients per round
+  
+  # Checkpointing
+  checkpoint_freq: 10
+  save_best_model: true
+  
+  # Aggregation method
+  aggregation_method: "fedavg"
+
+# Training configuration
+training:
+  # Reduced local epochs to prevent overfitting
+  local_epochs: 2  # Reduced from 5 to 2
+  
+  # Optimizer settings
+  optimizer: "adamw"
+  learning_rate: 0.0005  # 5e-4, slightly higher with warmup
+  weight_decay: 0.001  # Increased for regularization
+  betas: [0.9, 0.999]
+  eps: 1e-8
+  
+  # Learning rate scheduler (to be implemented)
+  scheduler:
+    type: "cosine"  # Options: cosine, step, exponential
+    warmup_epochs: 5
+    min_lr: 1e-6
+  
+  # Gradient clipping for stability
+  grad_clip: 1.0
+  
+  # Gradient accumulation (if needed for larger effective batch size)
+  accumulation_steps: 1
+
+# Privacy settings
+privacy:
+  enable_privacy: false
+  epsilon: 8.0
+  delta: 1e-5
+  max_grad_norm: 1.0
+  noise_multiplier: null
+  secure_aggregation: false
+  total_rounds: 100
+
+# Logging configuration
+logging:
+  log_level: "INFO"
+  save_logs: true
+  tensorboard: false
+  wandb: false
+
+# Evaluation settings
+evaluation:
+  # Increased frequency for better monitoring
+  eval_freq: 1  # Evaluate every round initially, change to 5 for production
+  eval_on_train: false
+  eval_on_test: true
+  save_predictions: false
+
+# Resource management
+resources:
+  max_memory_gb: null
+  max_time_hours: null
+
+# Reproducibility settings
+reproducibility:
+  deterministic: false  # Set to true for exact reproducibility (slower)
+  benchmark: true  # CUDNN benchmark for performance
+
+# Hyperparameter search grid (for reference)
+hyperparam_grid:
+  lora_r: [8, 16, 32]
+  local_epochs: [1, 2, 3]
+  learning_rate: [0.0001, 0.0005, 0.001]
+  weight_decay: [0.0001, 0.001, 0.01]
+  client_fraction: [0.3, 0.5, 1.0]

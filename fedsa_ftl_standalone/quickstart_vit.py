@@ -117,10 +117,20 @@ def main():
     print(f"Privacy: {'Enabled' if config.get('privacy', {}).get('enable_privacy', False) else 'Disabled'}")
     print("=" * 80)
     
-    # Set seed
+    # Set seed comprehensively for reproducibility
     if 'seed' in config:
-        torch.manual_seed(config['seed'])
-        np.random.seed(config['seed'])
+        seed = config['seed']
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        # Optional: for deterministic behavior (may reduce performance)
+        if config.get('reproducibility', {}).get('deterministic', False):
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+        else:
+            torch.backends.cudnn.benchmark = True
     
     # Prepare data
     print("\nPreparing federated data...")
@@ -224,9 +234,17 @@ def main():
     for round_idx in range(config['federated']['num_rounds']):
         print(f"\n[Round {round_idx + 1}/{config['federated']['num_rounds']}]")
         
-        # Select ALL clients for participation (full client participation)
-        # This ensures all clients participate in every round for accurate personalized evaluation
-        selected_clients = list(range(config['federated']['num_clients']))
+        # Select clients based on client_fraction
+        client_fraction = config['federated'].get('client_fraction', 1.0)
+        num_clients = config['federated']['num_clients']
+        num_selected = max(1, int(np.ceil(client_fraction * num_clients)))
+        
+        if client_fraction >= 1.0:
+            # Full participation
+            selected_clients = list(range(num_clients))
+        else:
+            # Random sampling
+            selected_clients = sorted(random.sample(range(num_clients), num_selected))
         
         print(f"Selected clients: {selected_clients}")
         
@@ -257,7 +275,9 @@ def main():
                   f"Accuracy={client_result['accuracy']:.2f}%")
         
         # Evaluation
-        if (round_idx + 1) % config.get('evaluation', {}).get('eval_freq', 5) == 0:
+        is_eval_round = (round_idx + 1) % config.get('evaluation', {}).get('eval_freq', 5) == 0
+        
+        if is_eval_round:
             print("\nEvaluating models...")
             
             # 1. Personalized Accuracy: Each client evaluates on their LOCAL test data
@@ -299,13 +319,18 @@ def main():
         
         print(f"\nRound {round_idx + 1} Summary:")
         print(f"  Avg Training Accuracy: {avg_train_acc:.2f}%")
-        if any(test_accuracies):
+        
+        # Track best accuracy only during evaluation rounds
+        is_new_best = False
+        if is_eval_round and test_accuracies:
             print(f"  Avg Personalized Test Accuracy: {avg_personalized_acc:.2f}%")
             # Track best PERSONALIZED accuracy as the main metric
             if avg_personalized_acc > best_accuracy:
                 best_accuracy = avg_personalized_acc
                 best_round = round_idx + 1
+                is_new_best = True
                 print(f"  ** New best personalized accuracy! **")
+        
         print(f"  Communication Cost: {round_stats.get('communication_cost_mb', 0):.2f} MB")
         
         # Save round results
@@ -318,7 +343,7 @@ def main():
             'individual_train_accuracies': train_accuracies,
             'individual_test_accuracies': test_accuracies if any(test_accuracies) else [],
             'communication_cost_mb': round_stats.get('communication_cost_mb', 0),
-            'is_best_round': avg_personalized_acc > best_accuracy if any(test_accuracies) else False
+            'is_best_round': is_new_best
         }
         results['rounds'].append(round_result)
         
