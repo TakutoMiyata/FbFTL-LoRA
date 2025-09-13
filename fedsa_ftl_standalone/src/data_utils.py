@@ -1,5 +1,6 @@
 """
 Data utilities for CIFAR-10/CIFAR-100 with non-IID split
+Enhanced with advanced data augmentation including Mixup and CutMix
 """
 
 import torch
@@ -7,61 +8,205 @@ import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Subset
 import numpy as np
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional, Callable
+import random
 
 
-def get_cifar_transforms(model_type='vgg'):
-    """Get CIFAR data transforms based on model type
+def get_cifar_transforms(model_type='vgg', augmentation_config=None):
+    """Get CIFAR data transforms based on model type with enhanced augmentation
     
     Args:
         model_type: 'vgg' for VGG models, 'vit' for Vision Transformers
+        augmentation_config: Dict with augmentation settings
     """
-    if model_type == 'vgg':
-        # VGG-16 expects 224x224 images, ImageNet normalization
-        transform_train = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(10),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
-        
-        transform_test = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
-    elif model_type == 'vit':
-        # ViT needs 224x224 images to match pre-training conditions
-        # This ensures spatial relationships learned during pre-training are preserved
-        transform_train = transforms.Compose([
-            transforms.Resize((224, 224)),  # Resize to match pre-training size
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(10),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # ImageNet normalization
-        ])
-        
-        transform_test = transforms.Compose([
-            transforms.Resize((224, 224)),  # Resize to match pre-training size
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # ImageNet normalization
-        ])
-    else:
-        raise ValueError(f"Unknown model type: {model_type}. Use 'vgg' or 'vit'")
+    # Default augmentation config
+    if augmentation_config is None:
+        augmentation_config = {}
+    
+    # Build training transforms based on configuration
+    train_transforms = []
+    
+    # Always resize to 224x224 for both VGG and ViT
+    train_transforms.append(transforms.Resize((224, 224)))
+    
+    # Random Crop with padding (if enabled)
+    if augmentation_config.get('random_crop', {}).get('enabled', False):
+        crop_config = augmentation_config['random_crop']
+        # For CIFAR images already resized to 224, we can apply RandomCrop with padding
+        train_transforms.append(
+            transforms.RandomCrop(224, padding=crop_config.get('padding', 4))
+        )
+    
+    # Horizontal Flip
+    if augmentation_config.get('horizontal_flip', {}).get('enabled', True):
+        flip_prob = augmentation_config.get('horizontal_flip', {}).get('prob', 0.5)
+        train_transforms.append(transforms.RandomHorizontalFlip(p=flip_prob))
+    
+    # Color Jitter
+    if augmentation_config.get('color_jitter', {}).get('enabled', False):
+        jitter_config = augmentation_config['color_jitter']
+        train_transforms.append(
+            transforms.ColorJitter(
+                brightness=jitter_config.get('brightness', 0.2),
+                contrast=jitter_config.get('contrast', 0.2),
+                saturation=jitter_config.get('saturation', 0.2),
+                hue=jitter_config.get('hue', 0.1)
+            )
+        )
+    
+    # Random Rotation
+    if augmentation_config.get('random_rotation', {}).get('enabled', True):
+        degrees = augmentation_config.get('random_rotation', {}).get('degrees', 10)
+        train_transforms.append(transforms.RandomRotation(degrees))
+    
+    # Random Erasing (similar to CutOut)
+    if augmentation_config.get('random_erasing', {}).get('enabled', False):
+        # This will be applied after ToTensor
+        pass
+    
+    # Convert to tensor
+    train_transforms.append(transforms.ToTensor())
+    
+    # Random Erasing (must be after ToTensor)
+    if augmentation_config.get('random_erasing', {}).get('enabled', False):
+        erase_config = augmentation_config['random_erasing']
+        train_transforms.append(
+            transforms.RandomErasing(
+                p=erase_config.get('prob', 0.5),
+                scale=erase_config.get('scale', (0.02, 0.33)),
+                ratio=erase_config.get('ratio', (0.3, 3.3))
+            )
+        )
+    
+    # Normalize (ImageNet statistics)
+    train_transforms.append(
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    )
+    
+    transform_train = transforms.Compose(train_transforms)
+    
+    # Test transforms (minimal augmentation)
+    transform_test = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
     
     return transform_train, transform_test
 
 
-def load_cifar_data(dataset_name='cifar100', data_dir='./data', model_type='vgg'):
-    """Load CIFAR dataset
+# ====================== Mixup and CutMix Implementation ======================
+
+class MixupCutmixCollate:
+    """Collate function that applies Mixup or CutMix to batches"""
+    
+    def __init__(self, mixup_alpha=0.2, cutmix_alpha=1.0, 
+                 mixup_prob=0.5, cutmix_prob=0.5, num_classes=100):
+        self.mixup_alpha = mixup_alpha
+        self.cutmix_alpha = cutmix_alpha
+        self.mixup_prob = mixup_prob
+        self.cutmix_prob = cutmix_prob
+        self.num_classes = num_classes
+        self.use_mixup = mixup_alpha > 0 and mixup_prob > 0
+        self.use_cutmix = cutmix_alpha > 0 and cutmix_prob > 0
+    
+    def __call__(self, batch):
+        """Apply Mixup or CutMix to a batch"""
+        # Standard collate
+        images = torch.stack([item[0] for item in batch])
+        targets = torch.tensor([item[1] for item in batch])
+        
+        if not self.training or (not self.use_mixup and not self.use_cutmix):
+            return images, targets
+        
+        # Decide which augmentation to use
+        use_cutmix = self.use_cutmix and np.random.rand() < self.cutmix_prob
+        use_mixup = self.use_mixup and not use_cutmix and np.random.rand() < self.mixup_prob
+        
+        if use_cutmix:
+            images, targets = self.cutmix(images, targets)
+        elif use_mixup:
+            images, targets = self.mixup(images, targets)
+        
+        return images, targets
+    
+    def mixup(self, images, targets):
+        """Apply Mixup augmentation"""
+        batch_size = images.size(0)
+        
+        # Sample lambda from Beta distribution
+        lam = np.random.beta(self.mixup_alpha, self.mixup_alpha)
+        
+        # Random shuffle for mixing
+        index = torch.randperm(batch_size)
+        
+        # Mix images
+        mixed_images = lam * images + (1 - lam) * images[index]
+        
+        # Convert targets to one-hot and mix
+        targets_a = torch.nn.functional.one_hot(targets, self.num_classes).float()
+        targets_b = torch.nn.functional.one_hot(targets[index], self.num_classes).float()
+        mixed_targets = lam * targets_a + (1 - lam) * targets_b
+        
+        return mixed_images, mixed_targets
+    
+    def cutmix(self, images, targets):
+        """Apply CutMix augmentation"""
+        batch_size = images.size(0)
+        
+        # Sample lambda from Beta distribution
+        lam = np.random.beta(self.cutmix_alpha, self.cutmix_alpha)
+        
+        # Random shuffle for mixing
+        index = torch.randperm(batch_size)
+        
+        # Get image dimensions
+        _, _, H, W = images.shape
+        
+        # Sample random box
+        cut_rat = np.sqrt(1. - lam)
+        cut_w = int(W * cut_rat)
+        cut_h = int(H * cut_rat)
+        
+        # Uniform sampling of box center
+        cx = np.random.randint(W)
+        cy = np.random.randint(H)
+        
+        # Box boundaries
+        x1 = np.clip(cx - cut_w // 2, 0, W)
+        y1 = np.clip(cy - cut_h // 2, 0, H)
+        x2 = np.clip(cx + cut_w // 2, 0, W)
+        y2 = np.clip(cy + cut_h // 2, 0, H)
+        
+        # Apply CutMix
+        mixed_images = images.clone()
+        mixed_images[:, :, y1:y2, x1:x2] = images[index, :, y1:y2, x1:x2]
+        
+        # Adjust lambda based on actual box area
+        lam = 1 - ((x2 - x1) * (y2 - y1) / (W * H))
+        
+        # Mix targets
+        targets_a = torch.nn.functional.one_hot(targets, self.num_classes).float()
+        targets_b = torch.nn.functional.one_hot(targets[index], self.num_classes).float()
+        mixed_targets = lam * targets_a + (1 - lam) * targets_b
+        
+        return mixed_images, mixed_targets
+    
+    def set_training(self, mode):
+        """Set training mode for enabling/disabling augmentation"""
+        self.training = mode
+
+
+def load_cifar_data(dataset_name='cifar100', data_dir='./data', model_type='vgg', augmentation_config=None):
+    """Load CIFAR dataset with augmentation support
     
     Args:
         dataset_name: 'cifar10' or 'cifar100'
         data_dir: Directory to store/load data
         model_type: 'vgg' or 'vit' for appropriate transforms
+        augmentation_config: Configuration for data augmentation
     """
-    transform_train, transform_test = get_cifar_transforms(model_type)
+    transform_train, transform_test = get_cifar_transforms(model_type, augmentation_config)
     
     if dataset_name.lower() == 'cifar100':
         trainset = torchvision.datasets.CIFAR100(
@@ -150,21 +295,30 @@ def create_iid_splits(dataset, num_clients: int) -> List[List[int]]:
 
 
 def get_client_dataloader(dataset, client_indices: List[int], batch_size: int, 
-                          shuffle: bool = True) -> DataLoader:
+                          shuffle: bool = True, collate_fn: Optional[Callable] = None,
+                          num_workers: int = 0) -> DataLoader:
     """
-    Create DataLoader for a specific client
+    Create DataLoader for a specific client with optional Mixup/CutMix
     
     Args:
         dataset: Full dataset
         client_indices: Indices for this client
         batch_size: Batch size
         shuffle: Whether to shuffle data
+        collate_fn: Optional collate function for Mixup/CutMix
+        num_workers: Number of workers for data loading
     
     Returns:
         DataLoader for the client
     """
     client_dataset = Subset(dataset, client_indices)
-    return DataLoader(client_dataset, batch_size=batch_size, shuffle=shuffle)
+    return DataLoader(
+        client_dataset, 
+        batch_size=batch_size, 
+        shuffle=shuffle,
+        collate_fn=collate_fn,
+        num_workers=num_workers
+    )
 
 
 def analyze_data_distribution(dataset, client_indices: List[List[int]], num_classes: int = 100):
@@ -204,7 +358,7 @@ def analyze_data_distribution(dataset, client_indices: List[List[int]], num_clas
 
 def prepare_federated_data(config: Dict):
     """
-    Prepare federated data based on configuration
+    Prepare federated data based on configuration with augmentation support
     
     Args:
         config: Configuration dictionary
@@ -216,11 +370,17 @@ def prepare_federated_data(config: Dict):
     np.random.seed(config.get('seed', 42))
     torch.manual_seed(config.get('seed', 42))
     
-    # Load CIFAR data (CIFAR-100 by default, CIFAR-10 optional)
+    # Load CIFAR data with augmentation config
     dataset_name = config.get('dataset_name', 'cifar100')
-    # Detect model type from config or default to 'vgg' for backward compatibility
     model_type = config.get('model_type', 'vgg')
-    trainset, testset = load_cifar_data(dataset_name, config.get('data_dir', './data'), model_type)
+    augmentation_config = config.get('augmentations', {})
+    
+    trainset, testset = load_cifar_data(
+        dataset_name, 
+        config.get('data_dir', './data'), 
+        model_type,
+        augmentation_config
+    )
     
     # Determine number of classes based on dataset
     num_classes = 100 if dataset_name.lower() == 'cifar100' else 10

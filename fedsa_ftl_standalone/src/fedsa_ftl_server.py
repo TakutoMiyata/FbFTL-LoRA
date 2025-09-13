@@ -116,20 +116,20 @@ class FedSAFTLServer:
         # Update global A parameters
         self.update_global_A_params(aggregated_A_params)
         
-        # Calculate communication cost (only A matrices)
-        communication_cost = sum(
+        # Calculate communication cost in MB (only A matrices)
+        communication_cost_bytes = sum(
             param.numel() * 4  # 4 bytes per float32
             for param in aggregated_A_params.values()
         )
+        communication_cost_mb = communication_cost_bytes / (1024 * 1024)
         
-        # Prepare round statistics
+        # Prepare round statistics (all in MB for consistency)
         round_stats = {
             'round': self.current_round,
             'num_clients': len(client_updates),
             'train_loss': avg_train_loss,
             'train_accuracy': avg_train_accuracy,
-            'communication_cost_bytes': communication_cost,
-            'communication_cost_mb': communication_cost / (1024 * 1024)
+            'communication_cost_mb': communication_cost_mb  # Consistent MB unit
         }
         
         # Add test results if provided (from client evaluations)
@@ -145,11 +145,11 @@ class FedSAFTLServer:
             self.history['test_loss'].append(avg_test_loss)
             self.history['test_accuracy'].append(avg_test_accuracy)
         
-        # Update history
+        # Update history (store in MB for consistency)
         self.history['round'].append(self.current_round)
         self.history['train_loss'].append(avg_train_loss)
         self.history['train_accuracy'].append(avg_train_accuracy)
-        self.history['communication_cost'].append(communication_cost)
+        self.history['communication_cost'].append(communication_cost_mb)  # Store in MB
         
         return round_stats
     
@@ -200,7 +200,8 @@ class FedSAFTLServer:
         if not self.history['round']:
             return {}
         
-        total_communication = sum(self.history['communication_cost'])
+        # Communication cost is already in MB
+        total_communication_mb = sum(self.history['communication_cost'])
         
         return {
             'total_rounds': self.current_round,
@@ -208,6 +209,6 @@ class FedSAFTLServer:
             'best_test_accuracy': max(self.history['test_accuracy']) if self.history['test_accuracy'] else 0,
             'final_train_accuracy': self.history['train_accuracy'][-1] if self.history['train_accuracy'] else 0,
             'final_test_accuracy': self.history['test_accuracy'][-1] if self.history['test_accuracy'] else 0,
-            'total_communication_mb': total_communication / (1024 * 1024),
-            'avg_communication_per_round_mb': (total_communication / self.current_round) / (1024 * 1024) if self.current_round > 0 else 0
+            'total_communication_mb': total_communication_mb,  # Already in MB
+            'avg_communication_per_round_mb': (total_communication_mb / self.current_round) if self.current_round > 0 else 0
         }

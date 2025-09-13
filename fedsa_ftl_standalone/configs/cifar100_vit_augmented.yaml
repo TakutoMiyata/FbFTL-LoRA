@@ -1,0 +1,97 @@
+# Configuration with full data augmentation for overfitting prevention
+# Based on the optimized config with augmentation enabled
+
+seed: 42
+use_gpu: true
+
+experiment:
+  name: "fedsa_ftl_cifar100_vit_augmented"
+  description: "FedSA-FTL with ViT on CIFAR-100 - Full augmentation"
+  output_dir: "experiments/vit_augmented"
+
+model:
+  num_classes: 100
+  model_name: "vit_small"
+  lora_r: 8  # Small rank for reduced communication
+  lora_alpha: 16
+  lora_dropout: 0.1
+  freeze_backbone: true
+  pretrained: false
+
+data:
+  dataset_name: "cifar100"
+  data_dir: "./data"
+  batch_size: 32
+  num_workers: 2
+  data_split: "non_iid"
+  alpha: 0.5
+  model_type: "vit"
+  
+  # Full augmentation configuration
+  augmentations:
+    # Standard augmentations
+    random_crop:
+      enabled: true
+      padding: 4
+    horizontal_flip:
+      enabled: true
+      prob: 0.5
+    color_jitter:
+      enabled: true
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.1
+    random_rotation:
+      enabled: true
+      degrees: 15
+    random_erasing:
+      enabled: true
+      prob: 0.25
+      scale: [0.02, 0.33]
+      ratio: [0.3, 3.3]
+    
+    # Mixup (choose either Mixup OR CutMix, not both)
+    mixup:
+      enabled: true
+      alpha: 0.2
+      prob: 0.5
+    
+    # CutMix (disabled when Mixup is enabled)
+    cutmix:
+      enabled: false
+      alpha: 1.0
+      prob: 0.5
+  
+  verbose: false
+
+federated:
+  num_clients: 10
+  num_rounds: 100
+  client_fraction: 0.3  # Sample 30% of clients
+  checkpoint_freq: 10
+  save_best_model: true
+  aggregation_method: "fedavg"
+
+training:
+  local_epochs: 2  # Reduced to prevent overfitting
+  optimizer: "adamw"
+  learning_rate: 0.0005
+  weight_decay: 0.001
+  betas: [0.9, 0.999]
+  eps: 1e-8
+  grad_clip: 1.0
+  accumulation_steps: 1
+
+privacy:
+  enable_privacy: false
+
+evaluation:
+  eval_freq: 5  # Evaluate every 5 rounds
+  eval_on_train: false
+  eval_on_test: true
+  save_predictions: false
+
+reproducibility:
+  deterministic: false
+  benchmark: true

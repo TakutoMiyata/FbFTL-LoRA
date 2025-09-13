@@ -42,7 +42,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from fedsa_ftl_model_vit import create_model_vit
 from fedsa_ftl_client import FedSAFTLClient
 from fedsa_ftl_server import FedSAFTLServer
-from data_utils import prepare_federated_data, get_client_dataloader
+from data_utils import prepare_federated_data, get_client_dataloader, MixupCutmixCollate
 from privacy_utils import DifferentialPrivacy
 from notification_utils import SlackNotifier
 
@@ -137,6 +137,26 @@ def main():
     # Ensure ViT-specific transforms are used
     config['data']['model_type'] = 'vit'
     trainset, testset, client_train_indices, client_test_indices = prepare_federated_data(config['data'])
+    
+    # Prepare Mixup/CutMix if enabled
+    collate_fn = None
+    augmentation_config = config['data'].get('augmentations', {})
+    mixup_config = augmentation_config.get('mixup', {})
+    cutmix_config = augmentation_config.get('cutmix', {})
+    
+    # Determine number of classes
+    num_classes = config['model'].get('num_classes', 100)
+    
+    if mixup_config.get('enabled', False) or cutmix_config.get('enabled', False):
+        print("Enabling Mixup/CutMix augmentation...")
+        collate_fn = MixupCutmixCollate(
+            mixup_alpha=mixup_config.get('alpha', 0.2) if mixup_config.get('enabled', False) else 0,
+            cutmix_alpha=cutmix_config.get('alpha', 1.0) if cutmix_config.get('enabled', False) else 0,
+            mixup_prob=mixup_config.get('prob', 0.5) if mixup_config.get('enabled', False) else 0,
+            cutmix_prob=cutmix_config.get('prob', 0.5) if cutmix_config.get('enabled', False) else 0,
+            num_classes=num_classes
+        )
+        collate_fn.set_training(True)  # Enable for training
     
     # Create test dataloader
     test_dataloader = torch.utils.data.DataLoader(
@@ -253,12 +273,14 @@ def main():
         train_accuracies = []
         
         for client_id in selected_clients:
-            # Get client training data
+            # Get client training data with optional Mixup/CutMix
             client_dataloader = get_client_dataloader(
                 trainset,
                 client_train_indices[client_id],
                 config['data']['batch_size'],
-                shuffle=True
+                shuffle=True,
+                collate_fn=collate_fn,  # Use Mixup/CutMix if enabled
+                num_workers=config['data'].get('num_workers', 0)
             )
             
             # Update with global parameters
@@ -285,12 +307,14 @@ def main():
             personalized_results = []
             personalized_accuracies = []
             for client_id in selected_clients:
-                # Get client's LOCAL test data
+                # Get client's LOCAL test data (no augmentation for testing)
                 client_test_dataloader = get_client_dataloader(
                     testset,
                     client_test_indices[client_id],
                     config['data']['batch_size'],
-                    shuffle=False
+                    shuffle=False,
+                    collate_fn=None,  # No Mixup/CutMix for testing
+                    num_workers=config['data'].get('num_workers', 0)
                 )
                 # Evaluate personalized model (A * B_i) on local test data
                 test_result = clients[client_id].evaluate(client_test_dataloader)
@@ -419,7 +443,7 @@ def main():
         'best_test_accuracy': best_accuracy,
         'best_round': best_round,
         'total_rounds': config['federated']['num_rounds'],
-        'total_communication_mb': sum(server.history['communication_cost']) / (1024 * 1024),
+        'total_communication_mb': sum(server.history['communication_cost']),  # Already in MB
         'final_avg_accuracy': avg_personalized_acc if 'avg_personalized_acc' in locals() else 0,
         'training_duration_hours': training_duration / 3600,
         'model_name': config['model']['model_name'],
@@ -473,7 +497,7 @@ def main():
     print(f"Model: {config['model']['model_name']}")
     print(f"Best Personalized Accuracy: {best_accuracy:.2f}% (Round {best_round})")
     print(f"Total Rounds: {config['federated']['num_rounds']}")
-    print(f"Total Communication: {sum(server.history['communication_cost']) / (1024 * 1024):.2f} MB")
+    print(f"Total Communication: {sum(server.history['communication_cost']):.2f} MB")
     print(f"Training Duration: {training_duration / 3600:.2f} hours")
     print(f"Results saved to: {experiment_dir}")
     print(f"  - Training results: final_results_{date_vit_suffix}.json")
@@ -498,7 +522,7 @@ def main():
             'final_std_accuracy': 0,  # Can calculate from individual client results if needed
             'best_test_accuracy': best_accuracy,
             'total_rounds': config['federated']['num_rounds'],
-            'total_communication_mb': sum(server.history['communication_cost']) / (1024 * 1024)
+            'total_communication_mb': sum(server.history['communication_cost'])  # Already in MB
         }
         
         slack_notifier.send_training_complete(
