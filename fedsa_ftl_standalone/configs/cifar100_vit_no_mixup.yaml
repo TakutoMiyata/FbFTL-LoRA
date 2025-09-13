@@ -1,0 +1,87 @@
+# Configuration without Mixup/CutMix for baseline comparison
+# Standard augmentation only
+
+seed: 42
+use_gpu: true
+
+experiment:
+  name: "fedsa_ftl_cifar100_vit_no_mixup"
+  description: "FedSA-FTL with ViT on CIFAR-100 - Standard augmentation only"
+  output_dir: "experiments/vit_no_mixup"
+
+model:
+  num_classes: 100
+  model_name: "vit_small"
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.1
+  freeze_backbone: true
+  pretrained: false
+
+data:
+  dataset_name: "cifar100"
+  data_dir: "./data"
+  batch_size: 32
+  num_workers: 2
+  data_split: "non_iid"
+  alpha: 0.5
+  model_type: "vit"
+  
+  # Standard augmentation only (no Mixup/CutMix)
+  augmentations:
+    random_crop:
+      enabled: true
+      padding: 4
+    horizontal_flip:
+      enabled: true
+      prob: 0.5
+    color_jitter:
+      enabled: false  # Can enable if needed
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.1
+    random_rotation:
+      enabled: true
+      degrees: 10
+    random_erasing:
+      enabled: false  # Can enable if needed
+      prob: 0.25
+    # Mixup and CutMix disabled
+    mixup:
+      enabled: false
+    cutmix:
+      enabled: false
+  
+  verbose: false
+
+federated:
+  num_clients: 10
+  num_rounds: 100
+  client_fraction: 0.3
+  checkpoint_freq: 10
+  save_best_model: true
+  aggregation_method: "fedavg"
+
+training:
+  local_epochs: 2
+  optimizer: "adamw"
+  learning_rate: 0.0005
+  weight_decay: 0.001
+  betas: [0.9, 0.999]
+  eps: 1e-8
+  grad_clip: 1.0
+  accumulation_steps: 1
+
+privacy:
+  enable_privacy: false
+
+evaluation:
+  eval_freq: 5
+  eval_on_train: false
+  eval_on_test: true
+  save_predictions: false
+
+reproducibility:
+  deterministic: false
+  benchmark: true

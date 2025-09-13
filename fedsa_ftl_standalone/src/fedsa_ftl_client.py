@@ -90,9 +90,26 @@ class FedSAFTLClient:
                 for batch_idx, (images, labels) in enumerate(pbar):
                     images, labels = images.to(self.device), labels.to(self.device)
                     
-                    # Forward pass
-                    outputs = self.model(images)
-                    loss = criterion(outputs, labels)
+                    # Check if labels are one-hot (from Mixup/CutMix)
+                    if labels.dim() == 2 and labels.size(1) > 1:
+                        # Mixup/CutMix: labels are soft (one-hot or mixed)
+                        # Use KL divergence loss for soft labels
+                        outputs = self.model(images)
+                        log_probs = torch.nn.functional.log_softmax(outputs, dim=1)
+                        # KL divergence loss (equivalent to cross entropy for soft labels)
+                        loss = -(labels * log_probs).sum(dim=1).mean()
+                        
+                        # For accuracy, use the argmax of soft labels
+                        _, predicted = outputs.max(1)
+                        _, label_indices = labels.max(1)
+                        epoch_correct += predicted.eq(label_indices).sum().item()
+                    else:
+                        # Standard labels (integer format)
+                        outputs = self.model(images)
+                        loss = criterion(outputs, labels)
+                        
+                        _, predicted = outputs.max(1)
+                        epoch_correct += predicted.eq(labels).sum().item()
                     
                     # Backward pass
                     optimizer.zero_grad()
@@ -108,9 +125,7 @@ class FedSAFTLClient:
                     
                     # Update metrics
                     epoch_loss += loss.item()
-                    _, predicted = outputs.max(1)
                     epoch_total += labels.size(0)
-                    epoch_correct += predicted.eq(labels).sum().item()
                     
                     # Update progress bar
                     pbar.set_postfix({
@@ -176,13 +191,28 @@ class FedSAFTLClient:
         with torch.no_grad():
             for images, labels in dataloader:
                 images, labels = images.to(self.device), labels.to(self.device)
-                outputs = self.model(images)
-                loss = criterion(outputs, labels)
                 
-                total_loss += loss.item() * labels.size(0)
-                _, predicted = outputs.max(1)
+                # Check if labels are one-hot (from Mixup/CutMix)
+                if labels.dim() == 2 and labels.size(1) > 1:
+                    # Soft labels
+                    outputs = self.model(images)
+                    log_probs = torch.nn.functional.log_softmax(outputs, dim=1)
+                    loss = -(labels * log_probs).sum(dim=1).mean()
+                    
+                    _, predicted = outputs.max(1)
+                    _, label_indices = labels.max(1)
+                    total_correct += predicted.eq(label_indices).sum().item()
+                    total_loss += loss.item() * labels.size(0)
+                else:
+                    # Standard labels
+                    outputs = self.model(images)
+                    loss = criterion(outputs, labels)
+                    
+                    total_loss += loss.item() * labels.size(0)
+                    _, predicted = outputs.max(1)
+                    total_correct += predicted.eq(labels).sum().item()
+                
                 total_samples += labels.size(0)
-                total_correct += predicted.eq(labels).sum().item()
         
         avg_loss = total_loss / total_samples
         avg_accuracy = 100. * total_correct / total_samples
@@ -240,13 +270,28 @@ class FedSAFTLClient:
             for images, labels in dataloader:
                 images, labels = images.to(self.device), labels.to(self.device)
                 
-                outputs = self.model(images)
-                loss = criterion(outputs, labels)
+                # Check if labels are one-hot (from Mixup/CutMix) - should not happen in evaluation
+                # but handle it just in case
+                if labels.dim() == 2 and labels.size(1) > 1:
+                    # Soft labels (shouldn't happen in evaluation, but handle gracefully)
+                    outputs = self.model(images)
+                    log_probs = torch.nn.functional.log_softmax(outputs, dim=1)
+                    loss = -(labels * log_probs).sum(dim=1).mean()
+                    
+                    _, predicted = outputs.max(1)
+                    _, label_indices = labels.max(1)
+                    test_correct += predicted.eq(label_indices).sum().item()
+                    test_loss += loss.item() * labels.size(0)
+                else:
+                    # Standard labels (normal case for evaluation)
+                    outputs = self.model(images)
+                    loss = criterion(outputs, labels)
+                    
+                    test_loss += loss.item() * labels.size(0)
+                    _, predicted = outputs.max(1)
+                    test_correct += predicted.eq(labels).sum().item()
                 
-                test_loss += loss.item() * labels.size(0)  # Weight by batch size
-                _, predicted = outputs.max(1)
                 test_total += labels.size(0)
-                test_correct += predicted.eq(labels).sum().item()
         
         return {
             'client_id': self.client_id,
