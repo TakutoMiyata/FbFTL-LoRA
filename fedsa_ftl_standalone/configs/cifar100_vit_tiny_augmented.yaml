@@ -1,20 +1,20 @@
-# Configuration with full data augmentation for overfitting prevention
-# Based on the optimized config with augmentation enabled
+# Configuration with stronger regularization and smaller ViT
+# Adjusted to reduce overfitting on CIFAR-100
 
 seed: 42
 use_gpu: true
 
 experiment:
-  name: "fedsa_ftl_cifar100_vit_augmented"
-  description: "FedSA-FTL with ViT on CIFAR-100 - Full augmentation"
-  output_dir: "experiments/vit_augmented"
+  name: "fedsa_ftl_cifar100_vit_tiny"
+  description: "FedSA-FTL with ViT-Tiny on CIFAR-100 - Strong regularization"
+  output_dir: "experiments/vit_tiny_augmented"
 
 model:
   num_classes: 100
-  model_name: "vit_small"
-  lora_r: 8  # Small rank for reduced communication
-  lora_alpha: 16
-  lora_dropout: 0.1
+  model_name: "vit_tiny"
+  lora_r: 4          # Smaller rank for lower capacity
+  lora_alpha: 8
+  lora_dropout: 0.3  # Stronger dropout
   freeze_backbone: true
   pretrained: true
 
@@ -27,9 +27,7 @@ data:
   alpha: 0.5
   model_type: "vit"
   
-  # Full augmentation configuration
   augmentations:
-    # Standard augmentations
     random_crop:
       enabled: true
       padding: 4
@@ -50,14 +48,10 @@ data:
       prob: 0.25
       scale: [0.02, 0.33]
       ratio: [0.3, 3.3]
-    
-    # Mixup (choose either Mixup OR CutMix, not both)
     mixup:
       enabled: true
       alpha: 0.2
       prob: 0.5
-    
-    # CutMix (disabled when Mixup is enabled)
     cutmix:
       enabled: false
       alpha: 1.0
@@ -68,26 +62,27 @@ data:
 federated:
   num_clients: 10
   num_rounds: 100
-  client_fraction: 0.3  # Sample 30% of clients
+  client_fraction: 0.3
   checkpoint_freq: 10
   save_best_model: true
   aggregation_method: "fedavg"
 
 training:
-  local_epochs: 2  # Reduced to prevent overfitting
+  local_epochs: 5        # Increased for smaller ViT
   optimizer: "adamw"
-  learning_rate: 0.0005
-  weight_decay: 0.001
+  learning_rate: 0.0002  # Lower for stability
+  weight_decay: 0.01     # Stronger regularization
   betas: [0.9, 0.999]
   eps: 1e-8
   grad_clip: 1.0
   accumulation_steps: 1
+  label_smoothing: 0.1   # Added for generalization
 
 privacy:
   enable_privacy: false
 
 evaluation:
-  eval_freq: 5  # Evaluate every 5 rounds
+  eval_freq: 5
   eval_on_train: false
   eval_on_test: true
   save_predictions: false
