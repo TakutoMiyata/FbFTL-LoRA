@@ -143,9 +143,7 @@ if args.data_split == 'non_iid':
     client_train_indices = create_non_iid_splits(
         train_dataset, 
         num_clients=args.num_clients,
-        num_classes=NUM_CLASSES,
-        alpha=args.alpha,
-        seed=random_seed
+        alpha=args.alpha
     )
     
     if args.verbose:
