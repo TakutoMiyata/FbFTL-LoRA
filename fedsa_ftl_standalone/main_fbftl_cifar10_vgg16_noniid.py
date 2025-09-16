@@ -139,9 +139,16 @@ if args.data_split == 'non_iid':
     print(f"Number of clients: {args.num_clients}")
     print(f"Dirichlet alpha: {args.alpha}")
     
-    # Create non-IID splits
+    # Create non-IID splits for training data
     client_train_indices = create_non_iid_splits(
         train_dataset, 
+        num_clients=args.num_clients,
+        alpha=args.alpha
+    )
+    
+    # Create non-IID splits for test data (using same alpha)
+    client_test_indices = create_non_iid_splits(
+        test_dataset, 
         num_clients=args.num_clients,
         alpha=args.alpha
     )
@@ -149,20 +156,31 @@ if args.data_split == 'non_iid':
     if args.verbose:
         print("\n=== Training Data Distribution Analysis ===")
         analyze_data_distribution(train_dataset, client_train_indices, NUM_CLASSES)
+        print("\n=== Test Data Distribution Analysis ===")
+        analyze_data_distribution(test_dataset, client_test_indices, NUM_CLASSES)
     
     # For this implementation, we simulate by using a subset that represents
     # the aggregated data from all clients (maintaining original single-loader structure)
-    all_selected_indices = []
+    all_train_indices = []
     for client_indices in client_train_indices:
-        all_selected_indices.extend(client_indices)
+        all_train_indices.extend(client_indices)
     
-    # Create subset with aggregated indices
-    train_subset = torch.utils.data.Subset(train_dataset, all_selected_indices)
+    all_test_indices = []
+    for client_indices in client_test_indices:
+        all_test_indices.extend(client_indices)
+    
+    # Create subsets with aggregated indices
+    train_subset = torch.utils.data.Subset(train_dataset, all_train_indices)
     train_loader = DataLoader(dataset=train_subset, batch_size=batch_size, 
                              num_workers=8, shuffle=True)
-    train_set_len = len(all_selected_indices)
+    train_set_len = len(all_train_indices)
+    
+    test_subset = torch.utils.data.Subset(test_dataset, all_test_indices)
+    test_loader = DataLoader(dataset=test_subset, batch_size=batch_size, 
+                            num_workers=8, shuffle=False)
     
     print(f"Total training samples after non-IID simulation: {train_set_len}")
+    print(f"Total test samples after non-IID simulation: {len(all_test_indices)}")
 
 else:
     # Original IID case
@@ -176,6 +194,9 @@ else:
         train_loader = torch.utils.data.DataLoader(dataset=trainset_1, batch_size=batch_size, 
                                                   num_workers=8, shuffle=True)
         train_set_len = len(selected_list)
+    
+    # Keep original test loader for IID case
+    # test_loader is already defined above
 
 ##########################
 ### LOAD MODEL (EXACT from original)
@@ -341,6 +362,44 @@ def compute_accuracy(model, data_loader):
             correct_pred += (predicted_labels == targets).sum()
         return correct_pred.float()/num_examples * 100
 
+def compute_client_accuracies(model, test_dataset, client_test_indices, batch_size=64):
+    """
+    Compute accuracy for each individual client's test data
+    """
+    model.eval()
+    client_accuracies = []
+    
+    for client_id, indices in enumerate(client_test_indices):
+        if len(indices) == 0:
+            client_accuracies.append(0.0)
+            continue
+            
+        # Create dataloader for this client's test data
+        client_test_subset = torch.utils.data.Subset(test_dataset, indices)
+        client_test_loader = DataLoader(
+            client_test_subset, 
+            batch_size=batch_size, 
+            shuffle=False, 
+            num_workers=4
+        )
+        
+        # Compute accuracy for this client
+        correct_pred, num_examples = 0, 0
+        with torch.no_grad():
+            for features, targets in client_test_loader:
+                features = features.to(DEVICE)
+                targets = targets.to(DEVICE)
+                
+                logits = model(features)
+                _, predicted_labels = torch.max(logits, 1)
+                num_examples += targets.size(0)
+                correct_pred += (predicted_labels == targets).sum()
+        
+        client_accuracy = correct_pred.float() / num_examples * 100
+        client_accuracies.append(client_accuracy.item())
+    
+    return client_accuracies
+
 def compute_epoch_loss(model, data_loader):
     """EXACT from original"""
     model.eval()
@@ -356,6 +415,11 @@ def compute_epoch_loss(model, data_loader):
 
         curr_loss = curr_loss / num_examples
         return curr_loss
+
+# Store client indices globally for evaluation
+global_client_test_indices = None
+if args.data_split == 'non_iid':
+    global_client_test_indices = client_test_indices
 
 print(f"\n{'='*80}")
 print(f"Training Configuration")
@@ -424,9 +488,23 @@ for epoch in range(num_epochs):
     model.eval()
     accuracy = compute_accuracy(model, test_loader)
     loss = compute_epoch_loss(model, test_loader)
-    with torch.set_grad_enabled(False):
+    
+    # Additional evaluation for non-IID: individual client accuracies
+    if args.data_split == 'non_iid' and (epoch + 1) % 20 == 0:  # Every 20 epochs
+        client_accuracies = compute_client_accuracies(model, test_dataset, global_client_test_indices, batch_size)
+        avg_client_accuracy = sum(client_accuracies) / len(client_accuracies)
+        std_client_accuracy = (sum([(acc - avg_client_accuracy)**2 for acc in client_accuracies]) / len(client_accuracies)) ** 0.5
+        
         print('Epoch: %03d/%03d | Test: %.3f%% | Loss: %.3f' % 
               (epoch+1, num_epochs, accuracy, loss))
+        print('  Individual Client Accuracies: [%s]' % 
+              ', '.join(['%.1f' % acc for acc in client_accuracies]))
+        print('  Client Accuracy Stats: Avg=%.3f%%, Std=%.3f%%' % 
+              (avg_client_accuracy, std_client_accuracy))
+    else:
+        with torch.set_grad_enabled(False):
+            print('Epoch: %03d/%03d | Test: %.3f%% | Loss: %.3f' % 
+                  (epoch+1, num_epochs, accuracy, loss))
 
     print('Time elapsed: %.2f min' % ((time.time() - start_time)/60))
     
