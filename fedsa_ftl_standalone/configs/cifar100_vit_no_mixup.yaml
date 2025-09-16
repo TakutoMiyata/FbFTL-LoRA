@@ -16,7 +16,7 @@ model:
   lora_alpha: 16
   lora_dropout: 0.1
   freeze_backbone: true
-  pretrained: false
+  pretrained: true
 
 data:
   dataset_name: "cifar100"

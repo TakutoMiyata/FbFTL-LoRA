@@ -58,13 +58,27 @@ def load_results(results_dir):
 
 def plot_accuracy_curves(results, save_dir):
     """Plot training and test accuracy curves"""
-    rounds_data = results['rounds']
-    
-    # Extract data
-    rounds = [r['round'] for r in rounds_data]
-    train_accs = [r['avg_train_accuracy'] for r in rounds_data]
-    test_accs = [r['avg_test_accuracy'] for r in rounds_data if r['avg_test_accuracy'] > 0]
-    test_rounds = [r['round'] for r in rounds_data if r['avg_test_accuracy'] > 0]
+    # Check if this is federated learning (rounds) or single client (epochs) data
+    if 'rounds' in results:
+        # Federated learning data
+        rounds_data = results['rounds']
+        rounds = [r['round'] for r in rounds_data]
+        train_accs = [r['avg_train_accuracy'] for r in rounds_data]
+        test_accs = [r['avg_test_accuracy'] for r in rounds_data if r['avg_test_accuracy'] > 0]
+        test_rounds = [r['round'] for r in rounds_data if r['avg_test_accuracy'] > 0]
+        x_label = 'Round'
+        title_prefix = 'ViT Federated Learning'
+    elif 'epochs' in results:
+        # Single client learning data
+        epochs_data = results['epochs']
+        rounds = [e['epoch'] for e in epochs_data]
+        train_accs = [e['train_accuracy'] for e in epochs_data]
+        test_accs = [e['test_accuracy'] for e in epochs_data if e['test_accuracy'] > 0]
+        test_rounds = [e['epoch'] for e in epochs_data if e['test_accuracy'] > 0]
+        x_label = 'Epoch'
+        title_prefix = 'ViT Single Client Learning'
+    else:
+        raise ValueError("No 'rounds' or 'epochs' data found in results")
     
     # Create figure
     plt.figure(figsize=(12, 8))
@@ -79,11 +93,11 @@ def plot_accuracy_curves(results, save_dir):
         best_acc = max(test_accs)
         best_round = test_rounds[test_accs.index(best_acc)]
         plt.scatter([best_round], [best_acc], color='red', s=100, zorder=5, 
-                   label=f'Best: {best_acc:.2f}% (Round {best_round})')
+                   label=f'Best: {best_acc:.2f}% ({x_label} {best_round})')
     
-    plt.xlabel('Round', fontsize=12)
+    plt.xlabel(x_label, fontsize=12)
     plt.ylabel('Accuracy (%)', fontsize=12)
-    plt.title('ViT Federated Learning - Accuracy Over Time', fontsize=14, fontweight='bold')
+    plt.title(f'{title_prefix} - Accuracy Over Time', fontsize=14, fontweight='bold')
     plt.legend(fontsize=11)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -97,12 +111,21 @@ def plot_accuracy_curves(results, save_dir):
 
 
 def plot_communication_cost(results, save_dir):
-    """Plot communication cost over rounds"""
-    rounds_data = results['rounds']
-    
-    # Extract data
-    rounds = [r['round'] for r in rounds_data]
-    comm_costs = [r['communication_cost_mb'] for r in rounds_data]
+    """Plot communication cost over rounds/epochs"""
+    # Check data type
+    if 'rounds' in results:
+        rounds_data = results['rounds']
+        rounds = [r['round'] for r in rounds_data]
+        comm_costs = [r['communication_cost_mb'] for r in rounds_data]
+        x_label = 'Round'
+        title_prefix = 'Federated Learning'
+    elif 'epochs' in results:
+        # Single client doesn't have communication cost, skip this plot
+        print("Communication cost plot not available for single client training")
+        return
+    else:
+        print("No communication cost data available")
+        return
     cumulative_costs = np.cumsum(comm_costs)
     
     # Create subplots
@@ -110,14 +133,14 @@ def plot_communication_cost(results, save_dir):
     
     # Per-round communication cost
     ax1.bar(rounds, comm_costs, alpha=0.7, color='skyblue', edgecolor='navy', linewidth=0.5)
-    ax1.set_xlabel('Round', fontsize=12)
+    ax1.set_xlabel(x_label, fontsize=12)
     ax1.set_ylabel('Communication Cost (MB)', fontsize=12)
-    ax1.set_title('Per-Round Communication Cost', fontsize=14, fontweight='bold')
+    ax1.set_title(f'Per-{x_label} Communication Cost', fontsize=14, fontweight='bold')
     ax1.grid(True, alpha=0.3)
     
     # Cumulative communication cost
     ax2.plot(rounds, cumulative_costs, 'g-', linewidth=2, marker='o', markersize=4)
-    ax2.set_xlabel('Round', fontsize=12)
+    ax2.set_xlabel(x_label, fontsize=12)
     ax2.set_ylabel('Cumulative Cost (MB)', fontsize=12)
     ax2.set_title('Cumulative Communication Cost', fontsize=14, fontweight='bold')
     ax2.grid(True, alpha=0.3)
@@ -143,36 +166,41 @@ def plot_communication_cost(results, save_dir):
 
 def plot_client_performance(results, save_dir):
     """Plot individual client performance distribution"""
-    rounds_data = results['rounds']
-    
-    # Collect client performance data
-    client_train_data = []
-    client_test_data = []
-    
-    for round_data in rounds_data:
-        round_num = round_data['round']
+    # Check data type
+    if 'rounds' in results:
+        rounds_data = results['rounds']
         
-        # Training accuracies
-        for i, acc in enumerate(round_data['individual_train_accuracies']):
-            client_train_data.append({
-                'round': round_num,
-                'client': f'Client {round_data["selected_clients"][i]}',
-                'accuracy': acc,
-                'type': 'Training'
-            })
+        # Collect client performance data
+        client_train_data = []
+        client_test_data = []
         
-        # Test accuracies (if available)
-        if round_data['individual_test_accuracies']:
-            for i, acc in enumerate(round_data['individual_test_accuracies']):
-                client_test_data.append({
+        for round_data in rounds_data:
+            round_num = round_data['round']
+            
+            # Training accuracies
+            for i, acc in enumerate(round_data['individual_train_accuracies']):
+                client_train_data.append({
                     'round': round_num,
                     'client': f'Client {round_data["selected_clients"][i]}',
                     'accuracy': acc,
-                    'type': 'Test'
+                    'type': 'Training'
                 })
-    
-    if not client_train_data:
-        print("No client performance data available for plotting")
+            
+            # Test accuracies (if available)
+            if round_data['individual_test_accuracies']:
+                for i, acc in enumerate(round_data['individual_test_accuracies']):
+                    client_test_data.append({
+                        'round': round_num,
+                        'client': f'Client {round_data["selected_clients"][i]}',
+                        'accuracy': acc,
+                        'type': 'Test'
+                    })
+    elif 'epochs' in results:
+        # Single client doesn't have multiple clients, skip this plot
+        print("Client performance plot not available for single client training")
+        return
+    else:
+        print("No client performance data available")
         return
     
     # Create DataFrame
@@ -201,16 +229,33 @@ def plot_client_performance(results, save_dir):
 
 def plot_summary_dashboard(results, save_dir):
     """Create a comprehensive dashboard with multiple metrics"""
-    rounds_data = results['rounds']
     config = results['config']
     summary = results.get('summary', {})
     
-    # Extract data
-    rounds = [r['round'] for r in rounds_data]
-    train_accs = [r['avg_train_accuracy'] for r in rounds_data]
-    test_accs = [r['avg_test_accuracy'] for r in rounds_data if r['avg_test_accuracy'] > 0]
-    test_rounds = [r['round'] for r in rounds_data if r['avg_test_accuracy'] > 0]
-    comm_costs = [r['communication_cost_mb'] for r in rounds_data]
+    # Check data type and extract accordingly
+    if 'rounds' in results:
+        rounds_data = results['rounds']
+        rounds = [r['round'] for r in rounds_data]
+        train_accs = [r['avg_train_accuracy'] for r in rounds_data]
+        test_accs = [r['avg_test_accuracy'] for r in rounds_data if r['avg_test_accuracy'] > 0]
+        test_rounds = [r['round'] for r in rounds_data if r['avg_test_accuracy'] > 0]
+        comm_costs = [r['communication_cost_mb'] for r in rounds_data]
+        x_label = 'Round'
+        title_suffix = 'Federated Learning'
+        has_comm_data = True
+    elif 'epochs' in results:
+        epochs_data = results['epochs']
+        rounds = [e['epoch'] for e in epochs_data]
+        train_accs = [e['train_accuracy'] for e in epochs_data]
+        test_accs = [e['test_accuracy'] for e in epochs_data if e['test_accuracy'] > 0]
+        test_rounds = [e['epoch'] for e in epochs_data if e['test_accuracy'] > 0]
+        comm_costs = []  # No communication costs for single client
+        x_label = 'Epoch'
+        title_suffix = 'Single Client Learning'
+        has_comm_data = False
+    else:
+        print("No compatible data found for dashboard")
+        return
     
     # Create dashboard
     fig = plt.figure(figsize=(20, 12))
@@ -223,7 +268,7 @@ def plot_summary_dashboard(results, save_dir):
         best_acc = max(test_accs)
         best_round = test_rounds[test_accs.index(best_acc)]
         ax1.scatter([best_round], [best_acc], color='red', s=100, zorder=5)
-    ax1.set_xlabel('Round')
+    ax1.set_xlabel(x_label)
     ax1.set_ylabel('Accuracy (%)')
     ax1.set_title('Learning Curves', fontsize=14, fontweight='bold')
     ax1.legend()
@@ -235,27 +280,39 @@ def plot_summary_dashboard(results, save_dir):
     config_text = f"""Configuration:
     Model: {config['model']['model_name']}
     Dataset: {config['data']['dataset_name'].upper()}
-    Clients: {config['federated']['num_clients']}
-    Rounds: {config['federated']['num_rounds']}
-    LoRA rank: {config['model']['lora_r']}
+    {x_label}s: {summary.get('total_rounds' if 'rounds' in results else 'total_epochs', 'N/A')}
+    LoRA rank: {config['model'].get('lora_r', 'N/A')}
     Privacy: {'Yes' if config.get('privacy', {}).get('enable_privacy') else 'No'}
     
     Results:
     Best Accuracy: {summary.get('best_test_accuracy', 0):.2f}%
-    Best Round: {summary.get('best_round', 'N/A')}
-    Total Comm: {summary.get('total_communication_mb', 0):.1f} MB
+    Best {x_label}: {summary.get('best_round' if 'rounds' in results else 'best_epoch', 'N/A')}
     Duration: {summary.get('training_duration_hours', 0):.1f}h"""
     
     ax2.text(0.05, 0.95, config_text, transform=ax2.transAxes, fontsize=11,
              verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
     
-    # Communication cost (bottom left)
-    ax3 = plt.subplot(2, 3, 4)
-    ax3.bar(rounds, comm_costs, alpha=0.7, color='skyblue', edgecolor='navy', linewidth=0.5)
-    ax3.set_xlabel('Round')
-    ax3.set_ylabel('Cost (MB)')
-    ax3.set_title('Communication Cost per Round', fontsize=12, fontweight='bold')
-    ax3.grid(True, alpha=0.3)
+    # Communication cost (bottom left) - only for federated learning
+    if has_comm_data and comm_costs:
+        ax3 = plt.subplot(2, 3, 4)
+        ax3.bar(rounds, comm_costs, alpha=0.7, color='skyblue', edgecolor='navy', linewidth=0.5)
+        ax3.set_xlabel(x_label)
+        ax3.set_ylabel('Cost (MB)')
+        ax3.set_title('Communication Cost per Round', fontsize=12, fontweight='bold')
+        ax3.grid(True, alpha=0.3)
+    else:
+        # For single client, show loss curve instead
+        ax3 = plt.subplot(2, 3, 4)
+        if 'epochs' in results:
+            epochs_data = results['epochs']
+            train_losses = [e.get('train_loss', 0) for e in epochs_data if e.get('train_loss', 0) > 0]
+            loss_epochs = [e['epoch'] for e in epochs_data if e.get('train_loss', 0) > 0]
+            if train_losses:
+                ax3.plot(loss_epochs, train_losses, 'orange', linewidth=2)
+                ax3.set_xlabel(x_label)
+                ax3.set_ylabel('Loss')
+                ax3.set_title('Training Loss', fontsize=12, fontweight='bold')
+                ax3.grid(True, alpha=0.3)
     
     # Accuracy improvement (bottom middle)
     if len(test_accs) > 1:
@@ -264,9 +321,9 @@ def plot_summary_dashboard(results, save_dir):
         colors = ['green' if x > 0 else 'red' for x in improvements]
         ax4.bar(test_rounds[1:], improvements, color=colors, alpha=0.7)
         ax4.axhline(y=0, color='black', linestyle='-', alpha=0.3)
-        ax4.set_xlabel('Round')
+        ax4.set_xlabel(x_label)
         ax4.set_ylabel('Accuracy Change (%)')
-        ax4.set_title('Round-to-Round Improvement', fontsize=12, fontweight='bold')
+        ax4.set_title(f'{x_label}-to-{x_label} Improvement', fontsize=12, fontweight='bold')
         ax4.grid(True, alpha=0.3)
     
     # Performance summary (bottom right)
@@ -280,7 +337,7 @@ def plot_summary_dashboard(results, save_dir):
         ax5.legend()
         ax5.grid(True, alpha=0.3)
     
-    plt.suptitle(f'ViT Federated Learning Dashboard - {config["model"]["model_name"]}', 
+    plt.suptitle(f'ViT {title_suffix} Dashboard - {config["model"]["model_name"]}', 
                  fontsize=16, fontweight='bold', y=0.95)
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
     
