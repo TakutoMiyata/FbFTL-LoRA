@@ -26,7 +26,7 @@ model:
 data:
   dataset_name: "cifar100"  # Use CIFAR-100 dataset
   data_dir: "./data"
-  batch_size: 32  # Smaller batch size for ViT memory efficiency
+  batch_size: 64  # Increased batch size from 32 to 64
   num_workers: 2
   data_split: "non_iid"  # "iid" or "non_iid"
   alpha: 0.5  # Dirichlet distribution parameter for non-IID split

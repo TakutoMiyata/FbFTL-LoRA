@@ -64,8 +64,24 @@ def plot_accuracy_curves(results, save_dir):
         rounds_data = results['rounds']
         rounds = [r['round'] for r in rounds_data]
         train_accs = [r['avg_train_accuracy'] for r in rounds_data]
-        test_accs = [r['avg_test_accuracy'] for r in rounds_data if r['avg_test_accuracy'] > 0]
-        test_rounds = [r['round'] for r in rounds_data if r['avg_test_accuracy'] > 0]
+        
+        # Handle different test accuracy field names
+        test_accs = []
+        test_rounds = []
+        for r in rounds_data:
+            # Try different possible field names for test accuracy
+            test_acc = None
+            if 'avg_test_accuracy' in r and r['avg_test_accuracy'] > 0:
+                test_acc = r['avg_test_accuracy']
+            elif 'avg_personalized_accuracy' in r and r['avg_personalized_accuracy'] > 0:
+                test_acc = r['avg_personalized_accuracy']
+            elif 'test_accuracy' in r and r['test_accuracy'] > 0:
+                test_acc = r['test_accuracy']
+            
+            if test_acc is not None:
+                test_accs.append(test_acc)
+                test_rounds.append(r['round'])
+        
         x_label = 'Round'
         title_prefix = 'ViT Federated Learning'
     elif 'epochs' in results:
@@ -178,23 +194,31 @@ def plot_client_performance(results, save_dir):
             round_num = round_data['round']
             
             # Training accuracies
-            for i, acc in enumerate(round_data['individual_train_accuracies']):
-                client_train_data.append({
-                    'round': round_num,
-                    'client': f'Client {round_data["selected_clients"][i]}',
-                    'accuracy': acc,
-                    'type': 'Training'
-                })
-            
-            # Test accuracies (if available)
-            if round_data['individual_test_accuracies']:
-                for i, acc in enumerate(round_data['individual_test_accuracies']):
-                    client_test_data.append({
+            if 'individual_train_accuracies' in round_data and 'selected_clients' in round_data:
+                for i, acc in enumerate(round_data['individual_train_accuracies']):
+                    client_train_data.append({
                         'round': round_num,
                         'client': f'Client {round_data["selected_clients"][i]}',
                         'accuracy': acc,
-                        'type': 'Test'
+                        'type': 'Training'
                     })
+            
+            # Test accuracies (if available) - handle different field names
+            test_accuracies = []
+            if 'individual_test_accuracies' in round_data and round_data['individual_test_accuracies']:
+                test_accuracies = round_data['individual_test_accuracies']
+            elif 'individual_personalized_accuracies' in round_data and round_data['individual_personalized_accuracies']:
+                test_accuracies = round_data['individual_personalized_accuracies']
+            
+            if test_accuracies and 'selected_clients' in round_data:
+                for i, acc in enumerate(test_accuracies):
+                    if acc > 0:  # Only include valid accuracies
+                        client_test_data.append({
+                            'round': round_num,
+                            'client': f'Client {round_data["selected_clients"][i]}',
+                            'accuracy': acc,
+                            'type': 'Test'
+                        })
     elif 'epochs' in results:
         # Single client doesn't have multiple clients, skip this plot
         print("Client performance plot not available for single client training")
@@ -237,8 +261,24 @@ def plot_summary_dashboard(results, save_dir):
         rounds_data = results['rounds']
         rounds = [r['round'] for r in rounds_data]
         train_accs = [r['avg_train_accuracy'] for r in rounds_data]
-        test_accs = [r['avg_test_accuracy'] for r in rounds_data if r['avg_test_accuracy'] > 0]
-        test_rounds = [r['round'] for r in rounds_data if r['avg_test_accuracy'] > 0]
+        
+        # Handle different test accuracy field names
+        test_accs = []
+        test_rounds = []
+        for r in rounds_data:
+            # Try different possible field names for test accuracy
+            test_acc = None
+            if 'avg_test_accuracy' in r and r['avg_test_accuracy'] > 0:
+                test_acc = r['avg_test_accuracy']
+            elif 'avg_personalized_accuracy' in r and r['avg_personalized_accuracy'] > 0:
+                test_acc = r['avg_personalized_accuracy']
+            elif 'test_accuracy' in r and r['test_accuracy'] > 0:
+                test_acc = r['test_accuracy']
+            
+            if test_acc is not None:
+                test_accs.append(test_acc)
+                test_rounds.append(r['round'])
+        
         comm_costs = [r['communication_cost_mb'] for r in rounds_data]
         x_label = 'Round'
         title_suffix = 'Federated Learning'
