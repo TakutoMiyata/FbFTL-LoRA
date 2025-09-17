@@ -199,6 +199,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             
             update = {
                 'A_params': safe_A_params,  # Use filtered safe parameters
+                'num_samples': self.local_data_size,  # Server expects 'num_samples' for weighted aggregation
                 'local_data_size': self.local_data_size,
                 'loss': avg_loss,
                 'accuracy': accuracy,
@@ -228,6 +229,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             # Return all parameters for standard federated learning
             update = {
                 'model_state': self.model.state_dict(),
+                'num_samples': self.local_data_size,  # Server expects 'num_samples' for weighted aggregation
                 'local_data_size': self.local_data_size,
                 'loss': avg_loss,
                 'accuracy': accuracy
