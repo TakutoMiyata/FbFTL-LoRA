@@ -59,8 +59,8 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         self.aggregation_method = config.get('federated', {}).get('aggregation_method', 'fedavg')
         
         # Initialize optimizer based on aggregation method and privacy settings
-        if self.aggregation_method == 'fedsa_shareA_dp':
-            if self.use_dp:
+        if self.aggregation_method in ['fedsa_shareA_dp', 'fedsa']:
+            if self.use_dp and (self.aggregation_method == 'fedsa_shareA_dp' or self.aggregation_method == 'fedsa'):
                 # DP optimizer for A matrices only - will update dataset_size in train()
                 self.dp_optimizer = create_dp_optimizer(
                     model, config, 
@@ -174,7 +174,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         accuracy = 100. * correct / total
         
         # Prepare update based on aggregation method
-        if self.aggregation_method == 'fedsa_shareA_dp':
+        if self.aggregation_method in ['fedsa_shareA_dp', 'fedsa']:
             # CRITICAL: Only return A parameters for FedSA - B matrices stay local!
             
             # Step 1: Get A parameter whitelist (safe keys only)
@@ -239,7 +239,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
     
     def update_model(self, global_params):
         """Update model with global parameters"""
-        if self.aggregation_method == 'fedsa_shareA_dp':
+        if self.aggregation_method in ['fedsa_shareA_dp', 'fedsa']:
             # Only update A parameters, keep B local
             if 'A_params' in global_params:
                 self.model.set_A_parameters(global_params['A_params'])
@@ -598,7 +598,7 @@ def main():
             
             # Update with global parameters based on aggregation method
             aggregation_method = config['federated'].get('aggregation_method', 'fedavg')
-            if aggregation_method == 'fedsa_shareA_dp':
+            if aggregation_method in ['fedsa_shareA_dp', 'fedsa']:
                 # Get global A parameters for FedSA
                 if hasattr(server, 'global_A_params') and server.global_A_params:
                     clients[client_id].update_model({'A_params': server.global_A_params})
