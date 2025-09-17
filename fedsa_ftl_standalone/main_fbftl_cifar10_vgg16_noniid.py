@@ -490,7 +490,7 @@ for epoch in range(num_epochs):
     loss = compute_epoch_loss(model, test_loader)
     
     # Additional evaluation for non-IID: individual client accuracies
-    if args.data_split == 'non_iid' and (epoch + 1) % 20 == 0:  # Every 20 epochs
+    if args.data_split == 'non_iid':
         client_accuracies = compute_client_accuracies(model, test_dataset, global_client_test_indices, batch_size)
         avg_client_accuracy = sum(client_accuracies) / len(client_accuracies)
         std_client_accuracy = (sum([(acc - avg_client_accuracy)**2 for acc in client_accuracies]) / len(client_accuracies)) ** 0.5
