@@ -1,0 +1,99 @@
+seed: 42
+use_gpu: true
+data:
+  dataset_name: cifar100
+  data_dir: ./data
+  num_clients: 10
+  data_split: non_iid
+  alpha: 0.5
+  batch_size: 128
+  num_workers: 4
+  model_type: resnet
+  verbose: false
+  augmentations:
+    horizontal_flip:
+      enabled: true
+      prob: 0.5
+    random_rotation:
+      enabled: true
+      degrees: 15
+    color_jitter:
+      enabled: true
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.1
+    random_crop:
+      enabled: true
+      padding: 4
+    random_erasing:
+      enabled: false
+      prob: 0.5
+    mixup:
+      enabled: false
+      alpha: 0.2
+      prob: 0.5
+    cutmix:
+      enabled: false
+      alpha: 1.0
+      prob: 0.5
+model:
+  model_name: resnet18
+  num_classes: 100
+  pretrained: true
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.1
+training:
+  epochs: 10
+  lr: 0.01
+  momentum: 0.9
+  weight_decay: 0.0005
+  scheduler: cosine
+  warmup_epochs: 2
+  optimizer: sgd
+  gradient_clip: 1.0
+  microbatch_size: 8
+federated:
+  num_rounds: 150
+  num_clients: 10
+  client_fraction: 1.0
+  aggregation_method: fedsa_shareA_dp
+  checkpoint_freq: 25
+privacy:
+  enable_privacy: true
+  target: lora_A
+  epsilon: 8
+  delta: 1.0e-05
+  max_grad_norm: 0.5
+  noise_multiplier: 1.0
+  use_opacus_accounting: true
+evaluation:
+  eval_freq: 5
+  save_best_model: true
+  metric: accuracy
+  patience: 30
+experiment:
+  name: ResNet18_CIFAR100_NonIID
+  output_dir: experiments/quickstart_resnet
+  save_model: true
+  save_history: true
+  log_interval: 10
+  use_wandb: false
+  wandb_project: fedsa-ftl-resnet
+  wandb_entity: null
+reproducibility:
+  deterministic: false
+communication:
+  compress: false
+  compression_ratio: 0.1
+  quantization_bits: null
+advanced:
+  use_fbftl: false
+  feature_extraction_rounds: 10
+  personalized: true
+  personalization_layers:
+  - classifier
+  - lora_B
+  server_lr: 0.01
+  server_momentum: 0.9
