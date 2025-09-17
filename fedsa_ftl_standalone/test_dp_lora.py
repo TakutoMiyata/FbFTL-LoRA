@@ -56,8 +56,8 @@ def test_model_parameter_separation():
     return model
 
 def test_dp_optimizer():
-    """Test DP optimizer functionality"""
-    print("\n=== Testing DP Optimizer ===")
+    """Test DP optimizer functionality with per-sample clipping"""
+    print("\n=== Testing DP Optimizer with Per-Sample Clipping ===")
     
     config = {
         'model_name': 'resnet18',
@@ -80,41 +80,46 @@ def test_dp_optimizer():
             'noise_multiplier': 1.0,
             'epsilon': 8.0,
             'delta': 1e-5
+        },
+        'data': {
+            'batch_size': 4
         }
     }
     
     model = create_model_resnet(config)
-    dp_optimizer = create_dp_optimizer(model, full_config)
+    dp_optimizer = create_dp_optimizer(model, full_config, batch_size=4, dataset_size=1000)
     
-    print(f"✅ DP Optimizer created")
+    print(f"✅ DP Optimizer created with proper accounting")
     print(f"✅ A parameter count: {len(dp_optimizer.A_params)}")
     print(f"✅ B parameter count: {len(dp_optimizer.B_params)}")
-    print(f"✅ Max grad norm: {dp_optimizer.max_grad_norm}")
-    print(f"✅ Noise multiplier: {dp_optimizer.noise_multiplier}")
+    print(f"✅ Batch size: {dp_optimizer.batch_size}")
+    print(f"✅ Dataset size: {dp_optimizer.dataset_size}")
+    print(f"✅ Sampling ratio: {min(1.0, dp_optimizer.batch_size / dp_optimizer.dataset_size):.4f}")
     
-    # Test gradient clipping and noise
-    dummy_input = torch.randn(2, 3, 224, 224)
-    dummy_target = torch.randint(0, 100, (2,))
+    # Test per-sample DP processing
+    dummy_input = torch.randn(4, 3, 224, 224)  # Batch of 4
+    dummy_target = torch.randint(0, 100, (4,))
     
     # Forward pass
     output = model(dummy_input)
-    loss = torch.nn.functional.cross_entropy(output, dummy_target)
+    loss_vec = torch.nn.functional.cross_entropy(output, dummy_target, reduction='none')
     
-    # Backward pass
-    dp_optimizer.zero_grad()
-    loss.backward()
+    print(f"✅ Loss vector shape: {loss_vec.shape} (per-sample losses)")
     
-    # Check gradients exist
+    # Test efficient DP backward with microbatching
+    dp_optimizer.dp_backward_on_loss_efficient(loss_vec, microbatch_size=2, also_compute_B_grads=True)
+    
+    # Check gradients exist for A parameters
     A_grads = [p.grad is not None for p in dp_optimizer.A_params]
-    B_grads = [p.grad is not None for p in dp_optimizer.B_params]
+    print(f"✅ A gradients after DP backward: {all(A_grads)} ({sum(A_grads)}/{len(A_grads)})")
     
-    print(f"✅ A gradients exist: {all(A_grads)} ({sum(A_grads)}/{len(A_grads)})")
-    print(f"✅ B gradients exist: {all(B_grads)} ({sum(B_grads)}/{len(B_grads)})")
+    # Test optimizer step
+    dp_optimizer.A_optimizer.step()
+    print(f"✅ DP step completed for A parameters")
     
-    # Test DP step
-    dp_optimizer.step()
-    print(f"✅ DP step completed")
-    print(f"✅ Privacy spent: {dp_optimizer.get_privacy_spent():.6f}")
+    # Test privacy analysis
+    privacy_analysis = dp_optimizer.get_privacy_analysis()
+    print(f"✅ Privacy analysis: {privacy_analysis}")
     
     return dp_optimizer
 

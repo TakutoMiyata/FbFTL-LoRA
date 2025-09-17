@@ -75,6 +75,7 @@ training:
   warmup_epochs: 2
   optimizer: sgd
   gradient_clip: 1.0
+  microbatch_size: 8  # For DP per-sample clipping
 
 # Federated learning configuration
 federated:

@@ -83,6 +83,7 @@ training:
   
   # Gradient clipping
   gradient_clip: 1.0  # Max gradient norm (set to null to disable)
+  microbatch_size: 8  # For DP per-sample clipping
 
 # Federated learning configuration
 federated:

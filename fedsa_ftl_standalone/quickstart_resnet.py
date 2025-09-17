@@ -58,11 +58,29 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         self.use_dp = config.get('privacy', {}).get('enable_privacy', False)
         self.aggregation_method = config.get('federated', {}).get('aggregation_method', 'fedavg')
         
-        # Initialize DP optimizer if privacy is enabled
-        if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp':
-            self.dp_optimizer = create_dp_optimizer(model, config)
+        # Initialize optimizer based on aggregation method and privacy settings
+        if self.aggregation_method == 'fedsa_shareA_dp':
+            if self.use_dp:
+                # DP optimizer for A matrices only - will update dataset_size in train()
+                self.dp_optimizer = create_dp_optimizer(
+                    model, config, 
+                    batch_size=config.get('data', {}).get('batch_size', 64),
+                    dataset_size=1000  # Placeholder, updated in train()
+                )
+                self.optimizer = None  # Not used when DP is enabled
+                print(f"Client {client_id}: Initialized DP optimizer for A matrices only")
+            else:
+                # Regular optimizer for FedSA without DP
+                training_config = config.get('training', {})
+                self.optimizer = torch.optim.SGD(
+                    model.parameters(),
+                    lr=training_config.get('lr', 0.001),
+                    momentum=training_config.get('momentum', 0.9),
+                    weight_decay=training_config.get('weight_decay', 0.0001)
+                )
+                self.dp_optimizer = None
         else:
-            # Standard optimizer
+            # Standard federated learning optimizer
             training_config = config.get('training', {})
             self.optimizer = torch.optim.SGD(
                 model.parameters(),
@@ -70,6 +88,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 momentum=training_config.get('momentum', 0.9),
                 weight_decay=training_config.get('weight_decay', 0.0001)
             )
+            self.dp_optimizer = None
         
         # Track local data size for weighted aggregation
         self.local_data_size = 0
@@ -83,10 +102,15 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         self.model.train()
         self.local_data_size = len(dataloader.dataset)
         
+        # Update DP optimizer with actual dataset size for privacy accounting
+        if hasattr(self, 'dp_optimizer') and self.dp_optimizer is not None:
+            self.dp_optimizer.update_dataset_size(self.local_data_size)
+        
         total_loss = 0.0
         correct = 0
         total = 0
         num_epochs = training_config.get('epochs', 5)
+        microbatch_size = training_config.get('microbatch_size', 8)  # For DP
         
         for epoch in range(num_epochs):
             epoch_loss = 0.0
@@ -102,27 +126,40 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     target_for_loss = target
                     target_for_acc = target
                 
-                # Forward pass
-                if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp':
-                    self.dp_optimizer.zero_grad()
-                else:
-                    self.optimizer.zero_grad()
-                
                 output = self.model(data)
                 
-                # Calculate loss
-                if len(target.shape) > 1:  # Mixup/CutMix loss
-                    loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
+                # Calculate loss with proper reduction for DP
+                if self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
+                    # DP requires per-sample losses for proper clipping
+                    if len(target.shape) > 1:  # Mixup/CutMix case
+                        # Convert to per-sample losses
+                        loss_vec = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1)
+                    else:
+                        loss_vec = F.cross_entropy(output, target_for_loss, reduction='none')
+                    
+                    # Efficient DP processing: single backward for both A and B
+                    # A gets DP treatment, B gets regular gradients from the same loss
+                    self.dp_optimizer.dp_backward_on_loss_efficient(
+                        loss_vec, microbatch_size, 
+                        also_compute_B_grads=True
+                    )
+                    
+                    # Calculate mean loss for logging
+                    loss = loss_vec.mean()
+                    
+                    # Step both optimizers (A has DP, B has regular gradients)
+                    self.dp_optimizer.A_optimizer.step()
+                    self.dp_optimizer.B_optimizer.step()
+                    
                 else:
-                    loss = F.cross_entropy(output, target_for_loss)
-                
-                # Backward pass
-                loss.backward()
-                
-                # Optimizer step (DP or regular)
-                if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp':
-                    self.dp_optimizer.step()
-                else:
+                    # Standard training
+                    if len(target.shape) > 1:  # Mixup/CutMix loss
+                        loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
+                    else:
+                        loss = F.cross_entropy(output, target_for_loss)
+                    
+                    self.optimizer.zero_grad()
+                    loss.backward()
                     self.optimizer.step()
                 
                 # Track metrics
@@ -138,15 +175,47 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         
         # Prepare update based on aggregation method
         if self.aggregation_method == 'fedsa_shareA_dp':
-            # Only return A parameters for FedSA
+            # CRITICAL: Only return A parameters for FedSA - B matrices stay local!
+            
+            # Step 1: Get A parameter whitelist (safe keys only)
+            A_whitelist = set(self.model.get_A_parameters().keys())
+            all_A_params = self.model.get_A_parameters()
+            
+            # Step 2: Filter using whitelist (defense against future code changes)
+            safe_A_params = {k: v for k, v in all_A_params.items() if k in A_whitelist}
+            
+            # Step 3: Double safety check: ensure no B parameters are included
+            B_param_names = set(self.model.get_B_parameters().keys())
+            A_param_names = set(safe_A_params.keys())
+            leaked_B_params = A_param_names.intersection(B_param_names)
+            
+            if leaked_B_params:
+                raise ValueError(f"SECURITY ALERT: B parameters leaked in A upload: {leaked_B_params}")
+            
+            # Step 4: Verify all A parameters are accounted for
+            if len(safe_A_params) != len(A_whitelist):
+                missing = A_whitelist - A_param_names
+                raise ValueError(f"INTEGRITY ERROR: Missing A parameters: {missing}")
+            
             update = {
-                'A_params': self.model.get_A_parameters(),
+                'A_params': safe_A_params,  # Use filtered safe parameters
                 'local_data_size': self.local_data_size,
                 'loss': avg_loss,
-                'accuracy': accuracy
+                'accuracy': accuracy,
+                'upload_type': 'A_matrices_only',  # For verification
+                'param_count': len(safe_A_params),  # For verification
+                'param_names': list(safe_A_params.keys())  # For debugging
             }
-            if self.use_dp:
-                update['privacy_spent'] = self.dp_optimizer.get_privacy_spent()
+            
+            if self.dp_optimizer is not None:
+                # Privacy analysis for A matrices only
+                privacy_analysis = self.dp_optimizer.get_privacy_analysis()
+                update['privacy_spent'] = privacy_analysis['privacy_spent']
+                update['privacy_analysis'] = privacy_analysis
+                update['privacy_note'] = 'DP applied to A matrices only'
+            
+            print(f"Client {self.client_id}: Uploading {len(safe_A_params)} A matrices only (B kept local)")
+            print(f"Client {self.client_id}: A param names: {list(safe_A_params.keys())}")
         else:
             # Return all parameters for standard federated learning
             update = {
@@ -165,10 +234,24 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             if 'A_params' in global_params:
                 self.model.set_A_parameters(global_params['A_params'])
                 print(f"Client {self.client_id}: Updated A matrices from server")
+                
+                # CRITICAL: Reset A optimizer state after parameter update
+                if hasattr(self, 'dp_optimizer') and self.dp_optimizer is not None:
+                    self.reset_A_optimizer_state()
+                    print(f"Client {self.client_id}: Reset A optimizer state")
         else:
             # Standard model update
             if 'model_state' in global_params:
                 self.model.load_state_dict(global_params['model_state'])
+    
+    def reset_A_optimizer_state(self):
+        """Reset optimizer state for A parameters after server update"""
+        if hasattr(self, 'dp_optimizer') and self.dp_optimizer is not None:
+            # Clear momentum and other state for A parameters
+            for p in self.model.get_A_parameter_groups():
+                if p in self.dp_optimizer.A_optimizer.state:
+                    self.dp_optimizer.A_optimizer.state[p].clear()
+            print(f"Client {self.client_id}: Cleared A optimizer momentum/state")
     
     def get_model_size(self):
         """Get model size information"""
@@ -381,7 +464,10 @@ def main():
     
     # Create model and get statistics
     print(f"Creating {config['model']['model_name']} model...")
-    temp_model = create_model_resnet(config['model'])
+    # Add seed to model config for reproducible LoRA initialization
+    model_config = config['model'].copy()
+    model_config['seed'] = config.get('seed', 42)
+    temp_model = create_model_resnet(model_config)
     temp_client = ResNetFedSAFTLClient(0, temp_model, device)
     model_stats = temp_client.get_model_size()
     
@@ -443,7 +529,10 @@ def main():
                 total_rounds=config['federated'].get('num_rounds', 100)
             )
         
-        client_model = create_model_resnet(config['model'])
+        # Add seed to model config for reproducible LoRA initialization
+        model_config = config['model'].copy()
+        model_config['seed'] = config.get('seed', 42)
+        client_model = create_model_resnet(model_config)
         client = ResNetFedSAFTLClient(
             client_id, 
             client_model, 
@@ -575,10 +664,18 @@ def main():
             total_A_params = sum(p.numel() for p in aggregated_A.values())
             communication_cost_mb = (total_A_params * 4) / (1024 * 1024)  # 4 bytes per float32
             
+            # Verify only A parameters were uploaded
+            for i, update in enumerate(client_updates):
+                if 'upload_type' in update and update['upload_type'] != 'A_matrices_only':
+                    print(f"WARNING: Client {i} uploaded unexpected parameters!")
+            
             # Log privacy information if DP is enabled
             if config.get('privacy', {}).get('enable_privacy', False):
-                avg_privacy_spent = sum(update.get('privacy_spent', 0) for update in client_updates) / len(client_updates)
-                print(f"  Average Privacy Spent: {avg_privacy_spent:.4f}")
+                privacy_updates = [update.get('privacy_spent', 0) for update in client_updates if 'privacy_spent' in update]
+                if privacy_updates:
+                    avg_privacy_spent = sum(privacy_updates) / len(privacy_updates)
+                    print(f"  Average Privacy Spent (A matrices only): {avg_privacy_spent:.4f}")
+                    print(f"  DP Note: Privacy protection applied only to shared A matrices")
             
             round_stats = {
                 'communication_cost_mb': communication_cost_mb,

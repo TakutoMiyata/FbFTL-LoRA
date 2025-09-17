@@ -13,7 +13,7 @@ from typing import Dict, Optional, List
 class LoRALayer(nn.Module):
     """LoRA adapter layer for ResNet with separate A and B parameters for FedSA-LoRA with DP"""
     
-    def __init__(self, in_features, out_features, rank=8, alpha=16, dropout=0.1):
+    def __init__(self, in_features, out_features, rank=8, alpha=16, dropout=0.1, seed=None):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -29,7 +29,15 @@ class LoRALayer(nn.Module):
         
         self.dropout = nn.Dropout(dropout)
         
-        # Initialize LoRA weights
+        # Initialize LoRA weights with proper seeding for reproducibility
+        if seed is not None:
+            # Set seed for reproducible initialization
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed(seed)
+        
+        # LoRA paper recommended initialization:
+        # A: random (Kaiming), B: zero (so A@B = 0 initially)
         nn.init.kaiming_uniform_(self.lora_A, a=5**0.5)
         nn.init.zeros_(self.lora_B)
     
@@ -65,6 +73,7 @@ class ResNetWithLoRA(nn.Module):
         self.lora_r = config.get('lora_r', 8)
         self.lora_alpha = config.get('lora_alpha', 16)
         self.lora_dropout = config.get('lora_dropout', 0.1)
+        self.seed = config.get('seed', None)  # For reproducible LoRA initialization
         
         # Load base ResNet model
         if self.model_name == 'resnet18':
@@ -109,7 +118,8 @@ class ResNetWithLoRA(nn.Module):
                     out_channels, out_channels, 
                     rank=self.lora_r,
                     alpha=self.lora_alpha,
-                    dropout=self.lora_dropout
+                    dropout=self.lora_dropout,
+                    seed=self.seed + block_idx if self.seed is not None else None
                 )
         else:
             # ResNet18/34 use basic blocks
@@ -122,7 +132,8 @@ class ResNetWithLoRA(nn.Module):
                     out_channels, out_channels,
                     rank=self.lora_r,
                     alpha=self.lora_alpha,
-                    dropout=self.lora_dropout
+                    dropout=self.lora_dropout,
+                    seed=self.seed + block_idx if self.seed is not None else None
                 )
         
         # Add LoRA to classifier as well
@@ -130,7 +141,8 @@ class ResNetWithLoRA(nn.Module):
             num_features, self.num_classes,
             rank=self.lora_r,
             alpha=self.lora_alpha,
-            dropout=self.lora_dropout
+            dropout=self.lora_dropout,
+            seed=self.seed + 1000 if self.seed is not None else None  # Unique seed for classifier
         )
         
         # Store feature dimension for feature extraction
