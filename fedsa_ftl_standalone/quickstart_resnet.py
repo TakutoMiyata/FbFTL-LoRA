@@ -415,10 +415,10 @@ def main():
     print(f"Clients: {config['federated']['num_clients']}")
     print(f"Rounds: {config['federated']['num_rounds']}")
     privacy_enabled = config.get('privacy', {}).get('enable_privacy', False)
-opacus_flag = config.get('privacy', {}).get('use_opacus_accounting', True)
-print(f"Privacy: {'Enabled' if privacy_enabled else 'Disabled'}")
-if privacy_enabled:
-    print(f"Privacy Method: Custom DP-SGD + {'Opacus RDP' if opacus_flag else 'Custom RDP'} accounting")
+    opacus_flag = config.get('privacy', {}).get('use_opacus_accounting', True)
+    print(f"Privacy: {'Enabled' if privacy_enabled else 'Disabled'}")
+    if privacy_enabled:
+        print(f"Privacy Method: Custom DP-SGD + {'Opacus RDP' if opacus_flag else 'Custom RDP'} accounting")
     print("=" * 80)
     
     # Set seed comprehensively for reproducibility
