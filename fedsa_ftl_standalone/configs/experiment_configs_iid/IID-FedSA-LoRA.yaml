@@ -67,9 +67,9 @@ federated:
   checkpoint_freq: 25
   client_fraction: 1.0
   num_clients: 10
-  num_rounds: 150
+  num_rounds: 50
 model:
-  lora_alpha: 32
+  lora_alpha: 16
   lora_dropout: 0.1
   lora_r: 16
   model_name: resnet18
@@ -87,7 +87,7 @@ reproducibility:
   deterministic: false
 seed: 42
 training:
-  epochs: 10
+  epochs: 3
   gradient_clip: 1.0
   lr: 0.01
   microbatch_size: 8

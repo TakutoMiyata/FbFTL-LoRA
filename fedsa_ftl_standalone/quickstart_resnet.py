@@ -480,7 +480,7 @@ def main():
     model_config = config['model'].copy()
     model_config['seed'] = config.get('seed', 42)
     temp_model = create_model_resnet(model_config)
-    temp_client = ResNetFedSAFTLClient(0, temp_model, device)
+    temp_client = ResNetFedSAFTLClient(0, temp_model, device, config)
     model_stats = temp_client.get_model_size()
     
     print("\nResNet Model Statistics:")

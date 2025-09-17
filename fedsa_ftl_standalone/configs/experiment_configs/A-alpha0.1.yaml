@@ -42,10 +42,10 @@ model:
   num_classes: 100
   pretrained: true
   lora_r: 0
-  lora_alpha: 32
+  lora_alpha: 16
   lora_dropout: 0.1
 training:
-  epochs: 10
+  epochs: 3
   lr: 0.01
   momentum: 0.9
   weight_decay: 0.0005
@@ -55,7 +55,7 @@ training:
   gradient_clip: 1.0
   microbatch_size: 8
 federated:
-  num_rounds: 150
+  num_rounds: 50
   num_clients: 10
   client_fraction: 1.0
   aggregation_method: fedavg
