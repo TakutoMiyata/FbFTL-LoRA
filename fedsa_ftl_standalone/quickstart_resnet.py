@@ -198,7 +198,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 raise ValueError(f"INTEGRITY ERROR: Missing A parameters: {missing}")
             
             update = {
-                'A_params': safe_A_params,  # Use filtered safe parameters
+                'lora_A_params': safe_A_params,  # Server expects 'lora_A_params' key
                 'num_samples': self.local_data_size,  # Server expects 'num_samples' for weighted aggregation
                 'local_data_size': self.local_data_size,
                 'loss': avg_loss,
