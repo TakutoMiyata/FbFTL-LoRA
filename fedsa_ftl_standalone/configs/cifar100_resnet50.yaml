@@ -104,6 +104,7 @@ privacy:
   delta: 1e-5  # Privacy parameter delta  
   max_grad_norm: 0.5  # Maximum gradient norm for clipping
   noise_multiplier: 1.0  # Noise multiplier for DP-SGD
+  use_opacus_accounting: true  # Use Opacus RDPAccountant for accurate epsilon calculation
 
 # Evaluation configuration
 evaluation:

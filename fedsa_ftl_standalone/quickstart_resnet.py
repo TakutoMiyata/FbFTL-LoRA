@@ -208,11 +208,19 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             }
             
             if self.dp_optimizer is not None:
-                # Privacy analysis for A matrices only
+                # Comprehensive privacy analysis for A matrices only
                 privacy_analysis = self.dp_optimizer.get_privacy_analysis()
-                update['privacy_spent'] = privacy_analysis['privacy_spent']
+                update['privacy_spent'] = privacy_analysis.get('custom_epsilon', 0)
                 update['privacy_analysis'] = privacy_analysis
                 update['privacy_note'] = 'DP applied to A matrices only'
+                
+                # Log privacy info for this client
+                custom_eps = privacy_analysis.get('custom_epsilon', 0)
+                opacus_eps = privacy_analysis.get('opacus_epsilon')
+                if opacus_eps != 'Not available':
+                    print(f"Client {self.client_id}: Privacy ε={custom_eps:.4f} (custom), ε={opacus_eps:.4f} (Opacus)")
+                else:
+                    print(f"Client {self.client_id}: Privacy ε={custom_eps:.4f} (custom only, install opacus for accurate)")
             
             print(f"Client {self.client_id}: Uploading {len(safe_A_params)} A matrices only (B kept local)")
             print(f"Client {self.client_id}: A param names: {list(safe_A_params.keys())}")
@@ -406,7 +414,11 @@ def main():
     print(f"Dataset: {config['data']['dataset_name'].upper()}")
     print(f"Clients: {config['federated']['num_clients']}")
     print(f"Rounds: {config['federated']['num_rounds']}")
-    print(f"Privacy: {'Enabled' if config.get('privacy', {}).get('enable_privacy', False) else 'Disabled'}")
+    privacy_enabled = config.get('privacy', {}).get('enable_privacy', False)
+opacus_flag = config.get('privacy', {}).get('use_opacus_accounting', True)
+print(f"Privacy: {'Enabled' if privacy_enabled else 'Disabled'}")
+if privacy_enabled:
+    print(f"Privacy Method: Custom DP-SGD + {'Opacus RDP' if opacus_flag else 'Custom RDP'} accounting")
     print("=" * 80)
     
     # Set seed comprehensively for reproducibility
@@ -669,13 +681,33 @@ def main():
                 if 'upload_type' in update and update['upload_type'] != 'A_matrices_only':
                     print(f"WARNING: Client {i} uploaded unexpected parameters!")
             
-            # Log privacy information if DP is enabled
+            # Enhanced privacy information logging
             if config.get('privacy', {}).get('enable_privacy', False):
-                privacy_updates = [update.get('privacy_spent', 0) for update in client_updates if 'privacy_spent' in update]
-                if privacy_updates:
-                    avg_privacy_spent = sum(privacy_updates) / len(privacy_updates)
-                    print(f"  Average Privacy Spent (A matrices only): {avg_privacy_spent:.4f}")
-                    print(f"  DP Note: Privacy protection applied only to shared A matrices")
+                privacy_analyses = [update.get('privacy_analysis', {}) for update in client_updates if 'privacy_analysis' in update]
+                if privacy_analyses:
+                    # Average privacy metrics across clients
+                    avg_custom_eps = sum(analysis.get('custom_epsilon', 0) for analysis in privacy_analyses) / len(privacy_analyses)
+                    
+                    print(f"\n  === Privacy Analysis (A matrices only) ===")
+                    print(f"  Custom RDP approximation: ε={avg_custom_eps:.4f}")
+                    
+                    # Show Opacus results if available
+                    opacus_epsilons = [analysis.get('opacus_epsilon') for analysis in privacy_analyses if analysis.get('opacus_epsilon') != 'Not available']
+                    if opacus_epsilons:
+                        avg_opacus_eps = sum(opacus_epsilons) / len(opacus_epsilons)
+                        print(f"  Opacus RDP accounting: ε={avg_opacus_eps:.4f} (recommended for academic use)")
+                        print(f"  Privacy Budget: ε≤{config['privacy'].get('epsilon', 8.0)}")
+                    else:
+                        print(f"  Opacus accounting: Not available (install opacus for accurate ε)")
+                    
+                    # Show key privacy parameters
+                    if privacy_analyses:
+                        sample_analysis = privacy_analyses[0]
+                        print(f"  Sampling ratio: {sample_analysis.get('sampling_ratio', 0):.4f}")
+                        print(f"  Noise multiplier: {sample_analysis.get('noise_multiplier', 0)}")
+                        print(f"  Steps taken: {sample_analysis.get('steps_taken', 0)}")
+                        print(f"  Note: Privacy protection applied only to shared A matrices")
+                    print(f"  =============================================")
             
             round_stats = {
                 'communication_cost_mb': communication_cost_mb,

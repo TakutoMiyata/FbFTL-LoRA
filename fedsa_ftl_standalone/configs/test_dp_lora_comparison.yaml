@@ -80,6 +80,7 @@ privacy:
   delta: 1e-5
   max_grad_norm: 0.5
   noise_multiplier: 1.0
+  use_opacus_accounting: true  # Test with Opacus RDP accounting
 
 # Evaluation configuration
 evaluation:
