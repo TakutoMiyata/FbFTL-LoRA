@@ -22,7 +22,7 @@ def load_results(results_dir):
     results_dir = Path(results_dir)
     
     # Try to find files with date+ViT pattern first
-    final_results_files = list(results_dir.glob('final_results_*ViT.json'))
+    final_results_files = list(results_dir.glob('final_results_*.json'))
     if final_results_files:
         # Use the most recent file if multiple exist
         final_results_file = sorted(final_results_files)[-1]
@@ -31,7 +31,7 @@ def load_results(results_dir):
             return json.load(f)
     
     # Try to find training results with date+ViT pattern
-    training_results_files = list(results_dir.glob('training_results_*ViT.json'))
+    training_results_files = list(results_dir.glob('training_results_*.json'))
     if training_results_files:
         training_results_file = sorted(training_results_files)[-1]
         print(f"Loading results from: {training_results_file}")
@@ -83,7 +83,7 @@ def plot_accuracy_curves(results, save_dir):
                 test_rounds.append(r['round'])
         
         x_label = 'Round'
-        title_prefix = 'ViT Federated Learning'
+        title_prefix = 'Federated Learning'
     elif 'epochs' in results:
         # Single client learning data
         epochs_data = results['epochs']
@@ -92,7 +92,7 @@ def plot_accuracy_curves(results, save_dir):
         test_accs = [e['test_accuracy'] for e in epochs_data if e['test_accuracy'] > 0]
         test_rounds = [e['epoch'] for e in epochs_data if e['test_accuracy'] > 0]
         x_label = 'Epoch'
-        title_prefix = 'ViT Single Client Learning'
+        title_prefix = 'Single Client Learning'
     else:
         raise ValueError("No 'rounds' or 'epochs' data found in results")
     
@@ -119,7 +119,7 @@ def plot_accuracy_curves(results, save_dir):
     plt.tight_layout()
     
     # Generate filename with date+ViT suffix
-    date_suffix = results.get('date_suffix', datetime.now().strftime('%m%d') + 'ViT')
+    date_suffix = results.get('date_suffix', datetime.now().strftime('%m%d'))
     save_path = Path(save_dir) / f'accuracy_curves_{date_suffix}.png'
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show()
@@ -173,7 +173,7 @@ def plot_communication_cost(results, save_dir):
     plt.tight_layout()
     
     # Generate filename with date+ViT suffix
-    date_suffix = results.get('date_suffix', datetime.now().strftime('%m%d') + 'ViT')
+    date_suffix = results.get('date_suffix', datetime.now().strftime('%m%d'))
     save_path = Path(save_dir) / f'communication_cost_{date_suffix}.png'
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show()
@@ -244,7 +244,7 @@ def plot_client_performance(results, save_dir):
         plt.tight_layout()
         
         # Generate filename with date+ViT suffix
-        date_suffix = results.get('date_suffix', datetime.now().strftime('%m%d') + 'ViT')
+        date_suffix = results.get('date_suffix', datetime.now().strftime('%m%d'))
         save_path = Path(save_dir) / f'client_performance_{date_suffix}.png'
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.show()
@@ -377,12 +377,12 @@ def plot_summary_dashboard(results, save_dir):
         ax5.legend()
         ax5.grid(True, alpha=0.3)
     
-    plt.suptitle(f'ViT {title_suffix} Dashboard - {config["model"]["model_name"]}', 
+    plt.suptitle(f'{title_suffix} Dashboard - {config["model"]["model_name"]}', 
                  fontsize=16, fontweight='bold', y=0.95)
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
     
     # Generate filename with date+ViT suffix
-    date_suffix = results.get('date_suffix', datetime.now().strftime('%m%d') + 'ViT')
+    date_suffix = results.get('date_suffix', datetime.now().strftime('%m%d'))
     save_path = Path(save_dir) / f'training_dashboard_{date_suffix}.png'
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show()
@@ -390,7 +390,7 @@ def plot_summary_dashboard(results, save_dir):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Plot ViT federated learning results')
+    parser = argparse.ArgumentParser(description='Plot federated learning results')
     parser.add_argument('results_dir', help='Directory containing training results')
     parser.add_argument('--output-dir', default=None, help='Output directory for plots (default: same as results_dir)')
     parser.add_argument('--plots', nargs='+', choices=['accuracy', 'communication', 'clients', 'dashboard', 'all'],

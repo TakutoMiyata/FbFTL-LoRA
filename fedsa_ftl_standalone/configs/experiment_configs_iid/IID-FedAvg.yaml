@@ -1,10 +1,8 @@
 advanced:
   feature_extraction_rounds: 10
-  personalization_layers:
-  - classifier
-  - lora_B
-  personalized: true
-  server_lr: 0.01
+  personalization_layers: []
+  personalized: false
+  server_lr: 1.0
   server_momentum: 0.9
   use_fbftl: false
 communication:
@@ -55,8 +53,8 @@ evaluation:
   save_best_model: true
 experiment:
   log_interval: 10
-  name: ResNet18_CIFAR100_IID
-  output_dir: experiments/quickstart_resnet_iid
+  name: ResNet18_CIFAR100_IID_FedAvg
+  output_dir: experiments/fedavg_resnet18_iid
   save_history: true
   save_model: true
   use_wandb: false
@@ -67,11 +65,11 @@ federated:
   checkpoint_freq: 25
   client_fraction: 1.0
   num_clients: 10
-  num_rounds: 150
+  num_rounds: 100
 model:
   lora_alpha: 32
   lora_dropout: 0.1
-  lora_r: 0
+  lora_r: 16
   model_name: resnet18
   num_classes: 100
   pretrained: true
@@ -87,13 +85,13 @@ reproducibility:
   deterministic: false
 seed: 42
 training:
-  epochs: 10
+  epochs: 3
   gradient_clip: 1.0
   lr: 0.01
   microbatch_size: 8
   momentum: 0.9
   optimizer: sgd
   scheduler: cosine
-  warmup_epochs: 2
+  warmup_epochs: 5
   weight_decay: 0.0005
 use_gpu: true
