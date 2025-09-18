@@ -603,10 +603,9 @@ def main():
                 if hasattr(server, 'global_A_params') and server.global_A_params:
                     clients[client_id].update_model({'A_params': server.global_A_params})
             else:
-                # Standard federated learning
-                global_params = server.get_global_A_params()
-                if global_params:
-                    clients[client_id].update_model(global_params)
+                # Standard federated learning (FedAvg)
+                if hasattr(server, 'global_model_state') and server.global_model_state:
+                    clients[client_id].update_model({'model_state': server.global_model_state})
             
             # Local training
             client_result = clients[client_id].train(client_dataloader, config['training'])
@@ -658,9 +657,9 @@ def main():
         # Server aggregation based on method
         aggregation_method = config['federated'].get('aggregation_method', 'fedavg')
         
-        if aggregation_method == 'fedsa_shareA_dp':
-            # FedSA with DP: aggregate only A matrices
-            client_A_params = [update['A_params'] for update in client_updates]
+        if aggregation_method in ['fedsa_shareA_dp', 'fedsa']:
+            # FedSA with or without DP: aggregate only A matrices
+            client_A_params = [update['lora_A_params'] for update in client_updates]
             client_sample_counts = [update['local_data_size'] for update in client_updates]
             
             # Aggregate A matrices using weighted average
@@ -714,11 +713,40 @@ def main():
             round_stats = {
                 'communication_cost_mb': communication_cost_mb,
                 'aggregated_params': total_A_params,
-                'aggregation_method': 'fedsa_shareA_dp'
+                'aggregation_method': aggregation_method
             }
         else:
-            # Standard federated learning
-            round_stats = server.federated_round(client_updates, client_test_results)
+            # Standard FedAvg - aggregate all parameters
+            # Weighted average based on sample counts
+            total_samples = sum(update['num_samples'] for update in client_updates)
+            weights = [update['num_samples'] / total_samples for update in client_updates]
+            
+            # Initialize aggregated model state
+            aggregated_state = {}
+            first_state = client_updates[0]['model_state']
+            
+            # Aggregate each parameter
+            for param_name in first_state.keys():
+                aggregated_param = torch.zeros_like(first_state[param_name])
+                for client_update, weight in zip(client_updates, weights):
+                    if param_name in client_update['model_state']:
+                        aggregated_param += weight * client_update['model_state'][param_name]
+                aggregated_state[param_name] = aggregated_param
+            
+            # Update server's global model (for FedAvg, server stores full model)
+            if not hasattr(server, 'global_model_state'):
+                server.global_model_state = {}
+            server.global_model_state = aggregated_state
+            
+            # Calculate communication cost (all parameters)
+            total_params = sum(p.numel() for p in aggregated_state.values())
+            communication_cost_mb = (total_params * 4) / (1024 * 1024)  # 4 bytes per float32
+            
+            round_stats = {
+                'communication_cost_mb': communication_cost_mb,
+                'aggregated_params': total_params,
+                'aggregation_method': aggregation_method
+            }
         
         # Print summary
         avg_train_acc = sum(train_accuracies) / len(train_accuracies)
