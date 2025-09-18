@@ -19,29 +19,42 @@ class LoRALayer(nn.Module):
         self.out_features = out_features
         self.rank = rank
         self.alpha = alpha
-        self.scaling = alpha / rank
+        self.scaling = alpha / rank if rank > 0 else 0
         
-        # LoRA matrices A and B as separate parameters for FedSA
-        # A matrix: shared across clients with DP
-        self.lora_A = nn.Parameter(torch.empty(rank, in_features))
-        # B matrix: kept local per client
-        self.lora_B = nn.Parameter(torch.empty(out_features, rank))
-        
-        self.dropout = nn.Dropout(dropout)
-        
-        # Initialize LoRA weights with proper seeding for reproducibility
-        if seed is not None:
-            # Set seed for reproducible initialization
-            torch.manual_seed(seed)
-            if torch.cuda.is_available():
-                torch.cuda.manual_seed(seed)
-        
-        # LoRA paper recommended initialization:
-        # A: random (Kaiming), B: zero (so A@B = 0 initially)
-        nn.init.kaiming_uniform_(self.lora_A, a=5**0.5)
-        nn.init.zeros_(self.lora_B)
+        # Only create LoRA matrices if rank > 0
+        if rank > 0:
+            # LoRA matrices A and B as separate parameters for FedSA
+            # A matrix: shared across clients with DP
+            self.lora_A = nn.Parameter(torch.empty(rank, in_features))
+            # B matrix: kept local per client
+            self.lora_B = nn.Parameter(torch.empty(out_features, rank))
+            
+            self.dropout = nn.Dropout(dropout)
+            
+            # Initialize LoRA weights with proper seeding for reproducibility
+            if seed is not None:
+                # Set seed for reproducible initialization
+                torch.manual_seed(seed)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed(seed)
+            
+            # LoRA paper recommended initialization:
+            # A: random (Kaiming), B: zero (so A@B = 0 initially)
+            nn.init.kaiming_uniform_(self.lora_A, a=5**0.5)
+            nn.init.zeros_(self.lora_B)
+        else:
+            # No LoRA when rank=0
+            self.lora_A = None
+            self.lora_B = None
+            self.dropout = None
     
     def forward(self, x):
+        # If no LoRA (rank=0), return zeros
+        if self.rank == 0:
+            original_shape = x.shape
+            output_shape = original_shape[:-1] + (self.out_features,)
+            return torch.zeros(output_shape, dtype=x.dtype, device=x.device)
+        
         # LoRA forward: x @ A.T @ B.T * scaling
         # x shape: (batch, ..., in_features)
         # Reshape for matrix operations
