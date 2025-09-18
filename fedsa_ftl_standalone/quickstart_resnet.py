@@ -173,7 +173,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         avg_loss = total_loss / (num_epochs * len(dataloader))
         accuracy = 100. * correct / total
         
-        # Prepare update based on aggregation method
+        # FedSA-LoRA: Only return A parameters
         if self.aggregation_method in ['fedsa_shareA_dp', 'fedsa']:
             # CRITICAL: Only return A parameters for FedSA - B matrices stay local!
             
@@ -226,33 +226,21 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             print(f"Client {self.client_id}: Uploading {len(safe_A_params)} A matrices only (B kept local)")
             print(f"Client {self.client_id}: A param names: {list(safe_A_params.keys())}")
         else:
-            # Return all parameters for standard federated learning
-            update = {
-                'model_state': self.model.state_dict(),
-                'num_samples': self.local_data_size,  # Server expects 'num_samples' for weighted aggregation
-                'local_data_size': self.local_data_size,
-                'loss': avg_loss,
-                'accuracy': accuracy
-            }
+            raise ValueError(f"Unsupported aggregation method: {self.aggregation_method}. This script only supports 'fedsa' and 'fedsa_shareA_dp'.")
         
         return update
     
     def update_model(self, global_params):
-        """Update model with global parameters"""
-        if self.aggregation_method in ['fedsa_shareA_dp', 'fedsa']:
-            # Only update A parameters, keep B local
-            if 'A_params' in global_params:
-                self.model.set_A_parameters(global_params['A_params'])
-                print(f"Client {self.client_id}: Updated A matrices from server")
-                
-                # CRITICAL: Reset A optimizer state after parameter update
-                if hasattr(self, 'dp_optimizer') and self.dp_optimizer is not None:
-                    self.reset_A_optimizer_state()
-                    print(f"Client {self.client_id}: Reset A optimizer state")
-        else:
-            # Standard model update
-            if 'model_state' in global_params:
-                self.model.load_state_dict(global_params['model_state'])
+        """Update model with global A parameters (FedSA-LoRA)"""
+        # Only update A parameters, keep B local
+        if 'A_params' in global_params:
+            self.model.set_A_parameters(global_params['A_params'])
+            print(f"Client {self.client_id}: Updated A matrices from server")
+            
+            # CRITICAL: Reset A optimizer state after parameter update
+            if hasattr(self, 'dp_optimizer') and self.dp_optimizer is not None:
+                self.reset_A_optimizer_state()
+                print(f"Client {self.client_id}: Reset A optimizer state")
     
     def reset_A_optimizer_state(self):
         """Reset optimizer state for A parameters after server update"""
@@ -295,7 +283,7 @@ def main():
     else:
         print("Slack notifications disabled (set SLACK_WEBHOOK_URL environment variable to enable)")
 
-    parser = argparse.ArgumentParser(description='FedSA-FTL ResNet Quick Start')
+    parser = argparse.ArgumentParser(description='FedSA-LoRA ResNet (A matrices only)')
     parser.add_argument('--config', type=str, default='configs/cifar100_resnet50.yaml',
                        help='Path to configuration file')
     parser.add_argument('--rounds', type=int, default=None,
@@ -408,7 +396,7 @@ def main():
     device = torch.device('cuda' if config.get('use_gpu', False) and torch.cuda.is_available() else 'cpu')
     
     print("=" * 80)
-    print("FedSA-FTL ResNet Federated Learning")
+    print("FedSA-LoRA ResNet Federated Learning (A matrices only)")
     print("=" * 80)
     print(f"Configuration: {config_path}")
     print(f"Device: {device}")
@@ -596,16 +584,9 @@ def main():
                 num_workers=config['data'].get('num_workers', 0)
             )
             
-            # Update with global parameters based on aggregation method
-            aggregation_method = config['federated'].get('aggregation_method', 'fedavg')
-            if aggregation_method in ['fedsa_shareA_dp', 'fedsa']:
-                # Get global A parameters for FedSA
-                if hasattr(server, 'global_A_params') and server.global_A_params:
-                    clients[client_id].update_model({'A_params': server.global_A_params})
-            else:
-                # Standard federated learning (FedAvg)
-                if hasattr(server, 'global_model_state') and server.global_model_state:
-                    clients[client_id].update_model({'model_state': server.global_model_state})
+            # Update with global A parameters (FedSA-LoRA)
+            if hasattr(server, 'global_A_params') and server.global_A_params:
+                clients[client_id].update_model({'A_params': server.global_A_params})
             
             # Local training
             client_result = clients[client_id].train(client_dataloader, config['training'])
@@ -654,103 +635,69 @@ def main():
             # Create proper test results with both accuracy and loss keys
             client_test_results = [{'accuracy': 0, 'loss': 0} for _ in selected_clients]
         
-        # Server aggregation based on method
-        aggregation_method = config['federated'].get('aggregation_method', 'fedavg')
+        # FedSA-LoRA Server aggregation (A matrices only)
+        aggregation_method = config['federated'].get('aggregation_method', 'fedsa')
         
-        if aggregation_method in ['fedsa_shareA_dp', 'fedsa']:
-            # FedSA with or without DP: aggregate only A matrices
-            client_A_params = [update['lora_A_params'] for update in client_updates]
-            client_sample_counts = [update['local_data_size'] for update in client_updates]
-            
-            # Aggregate A matrices using weighted average
-            aggregated_A = WeightedFedAvg.aggregate_A_matrices(client_A_params, client_sample_counts)
-            
-            # Store global A parameters
-            if not hasattr(server, 'global_A_params'):
-                server.global_A_params = {}
-            server.global_A_params = aggregated_A
-            
-            # Log aggregation info
-            WeightedFedAvg.log_aggregation_info(client_sample_counts, len(aggregated_A))
-            
-            # Calculate communication cost (only A matrices)
-            total_A_params = sum(p.numel() for p in aggregated_A.values())
-            communication_cost_mb = (total_A_params * 4) / (1024 * 1024)  # 4 bytes per float32
-            
-            # Verify only A parameters were uploaded
-            for i, update in enumerate(client_updates):
-                if 'upload_type' in update and update['upload_type'] != 'A_matrices_only':
-                    print(f"WARNING: Client {i} uploaded unexpected parameters!")
-            
-            # Enhanced privacy information logging
-            if config.get('privacy', {}).get('enable_privacy', False):
-                privacy_analyses = [update.get('privacy_analysis', {}) for update in client_updates if 'privacy_analysis' in update]
+        if aggregation_method not in ['fedsa_shareA_dp', 'fedsa']:
+            raise ValueError(f"Unsupported aggregation method: {aggregation_method}. This script only supports 'fedsa' and 'fedsa_shareA_dp'. Use quickstart_resnet_fedavg.py for standard FedAvg.")
+        
+        # FedSA: aggregate only A matrices
+        client_A_params = [update['lora_A_params'] for update in client_updates]
+        client_sample_counts = [update['local_data_size'] for update in client_updates]
+        
+        # Aggregate A matrices using weighted average
+        aggregated_A = WeightedFedAvg.aggregate_A_matrices(client_A_params, client_sample_counts)
+        
+        # Store global A parameters
+        if not hasattr(server, 'global_A_params'):
+            server.global_A_params = {}
+        server.global_A_params = aggregated_A
+        
+        # Log aggregation info
+        WeightedFedAvg.log_aggregation_info(client_sample_counts, len(aggregated_A))
+        
+        # Calculate communication cost (only A matrices)
+        total_A_params = sum(p.numel() for p in aggregated_A.values())
+        communication_cost_mb = (total_A_params * 4) / (1024 * 1024)  # 4 bytes per float32
+        
+        # Verify only A parameters were uploaded
+        for i, update in enumerate(client_updates):
+            if 'upload_type' in update and update['upload_type'] != 'A_matrices_only':
+                print(f"WARNING: Client {i} uploaded unexpected parameters!")
+        
+        # Enhanced privacy information logging
+        if config.get('privacy', {}).get('enable_privacy', False):
+            privacy_analyses = [update.get('privacy_analysis', {}) for update in client_updates if 'privacy_analysis' in update]
+            if privacy_analyses:
+                # Average privacy metrics across clients
+                avg_custom_eps = sum(analysis.get('custom_epsilon', 0) for analysis in privacy_analyses) / len(privacy_analyses)
+                
+                print(f"\n  === Privacy Analysis (A matrices only) ===")
+                print(f"  Custom RDP approximation: ε={avg_custom_eps:.4f}")
+                
+                # Show Opacus results if available
+                opacus_epsilons = [analysis.get('opacus_epsilon') for analysis in privacy_analyses if analysis.get('opacus_epsilon') != 'Not available']
+                if opacus_epsilons:
+                    avg_opacus_eps = sum(opacus_epsilons) / len(opacus_epsilons)
+                    print(f"  Opacus RDP accounting: ε={avg_opacus_eps:.4f} (recommended for academic use)")
+                    print(f"  Privacy Budget: ε≤{config['privacy'].get('epsilon', 8.0)}")
+                else:
+                    print(f"  Opacus accounting: Not available (install opacus for accurate ε)")
+                
+                # Show key privacy parameters
                 if privacy_analyses:
-                    # Average privacy metrics across clients
-                    avg_custom_eps = sum(analysis.get('custom_epsilon', 0) for analysis in privacy_analyses) / len(privacy_analyses)
-                    
-                    print(f"\n  === Privacy Analysis (A matrices only) ===")
-                    print(f"  Custom RDP approximation: ε={avg_custom_eps:.4f}")
-                    
-                    # Show Opacus results if available
-                    opacus_epsilons = [analysis.get('opacus_epsilon') for analysis in privacy_analyses if analysis.get('opacus_epsilon') != 'Not available']
-                    if opacus_epsilons:
-                        avg_opacus_eps = sum(opacus_epsilons) / len(opacus_epsilons)
-                        print(f"  Opacus RDP accounting: ε={avg_opacus_eps:.4f} (recommended for academic use)")
-                        print(f"  Privacy Budget: ε≤{config['privacy'].get('epsilon', 8.0)}")
-                    else:
-                        print(f"  Opacus accounting: Not available (install opacus for accurate ε)")
-                    
-                    # Show key privacy parameters
-                    if privacy_analyses:
-                        sample_analysis = privacy_analyses[0]
-                        print(f"  Sampling ratio: {sample_analysis.get('sampling_ratio', 0):.4f}")
-                        print(f"  Noise multiplier: {sample_analysis.get('noise_multiplier', 0)}")
-                        print(f"  Steps taken: {sample_analysis.get('steps_taken', 0)}")
-                        print(f"  Note: Privacy protection applied only to shared A matrices")
-                    print(f"  =============================================")
-            
-            round_stats = {
-                'communication_cost_mb': communication_cost_mb,
-                'aggregated_params': total_A_params,
-                'aggregation_method': aggregation_method
-            }
-        else:
-            # Standard FedAvg - aggregate all parameters
-            # Weighted average based on sample counts
-            total_samples = sum(update['num_samples'] for update in client_updates)
-            weights = [update['num_samples'] / total_samples for update in client_updates]
-            
-            # Initialize aggregated model state
-            aggregated_state = {}
-            first_state = client_updates[0]['model_state']
-            
-            # Aggregate each parameter
-            for param_name in first_state.keys():
-                aggregated_param = torch.zeros_like(first_state[param_name], dtype=torch.float32)
-                for client_update, weight in zip(client_updates, weights):
-                    if param_name in client_update['model_state']:
-                        # Convert to float32 for aggregation, then convert back to original dtype
-                        param_data = client_update['model_state'][param_name].float()
-                        aggregated_param += weight * param_data
-                # Convert back to original dtype
-                original_dtype = first_state[param_name].dtype
-                aggregated_state[param_name] = aggregated_param.to(original_dtype)
-            
-            # Update server's global model (for FedAvg, server stores full model)
-            if not hasattr(server, 'global_model_state'):
-                server.global_model_state = {}
-            server.global_model_state = aggregated_state
-            
-            # Calculate communication cost (all parameters)
-            total_params = sum(p.numel() for p in aggregated_state.values())
-            communication_cost_mb = (total_params * 4) / (1024 * 1024)  # 4 bytes per float32
-            
-            round_stats = {
-                'communication_cost_mb': communication_cost_mb,
-                'aggregated_params': total_params,
-                'aggregation_method': aggregation_method
-            }
+                    sample_analysis = privacy_analyses[0]
+                    print(f"  Sampling ratio: {sample_analysis.get('sampling_ratio', 0):.4f}")
+                    print(f"  Noise multiplier: {sample_analysis.get('noise_multiplier', 0)}")
+                    print(f"  Steps taken: {sample_analysis.get('steps_taken', 0)}")
+                    print(f"  Note: Privacy protection applied only to shared A matrices")
+                print(f"  =============================================")
+        
+        round_stats = {
+            'communication_cost_mb': communication_cost_mb,
+            'aggregated_params': total_A_params,
+            'aggregation_method': aggregation_method
+        }
         
         # Print summary
         avg_train_acc = sum(train_accuracies) / len(train_accuracies)
