@@ -39,7 +39,7 @@ load_env_file()
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 # Now import from src modules
-from fedsa_ftl_model_resnet import create_model_resnet
+from cifar_resnet_lora import create_cifar_resnet_lora
 from fedsa_ftl_client import FedSAFTLClient
 from fedsa_ftl_server import FedSAFTLServer
 from data_utils import prepare_federated_data, get_client_dataloader, MixupCutmixCollate
@@ -137,22 +137,24 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     else:
                         loss_vec = F.cross_entropy(output, target_for_loss, reduction='none')
                     
-                    # Efficient DP processing: single backward for both A and B
-                    # A gets DP treatment, B gets regular gradients from the same loss
+                    # DP processing: handles gradients and zeroing internally
+                    # NOTE: Do NOT call optimizer.zero_grad() before this - it's handled internally
+                    # A gets DP treatment (clipped + noise), B gets regular gradients
                     self.dp_optimizer.dp_backward_on_loss_efficient(
-                        loss_vec, microbatch_size, 
+                        loss_vec, 
+                        microbatch_size=microbatch_size,
                         also_compute_B_grads=True
                     )
                     
                     # Calculate mean loss for logging
                     loss = loss_vec.mean()
                     
-                    # Step both optimizers (A has DP, B has regular gradients)
+                    # Step both optimizers (gradients already computed above)
                     self.dp_optimizer.A_optimizer.step()
                     self.dp_optimizer.B_optimizer.step()
                     
                 else:
-                    # Standard training
+                    # Standard training (non-DP)
                     if len(target.shape) > 1:  # Mixup/CutMix loss
                         loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
                     else:
@@ -198,7 +200,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 raise ValueError(f"INTEGRITY ERROR: Missing A parameters: {missing}")
             
             update = {
-                'lora_A_params': safe_A_params,  # Server expects 'lora_A_params' key
+                'A_params': safe_A_params,  # Server expects 'A_params' key
                 'num_samples': self.local_data_size,  # Server expects 'num_samples' for weighted aggregation
                 'local_data_size': self.local_data_size,
                 'loss': avg_loss,
@@ -225,6 +227,15 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             
             print(f"Client {self.client_id}: Uploading {len(safe_A_params)} A matrices only (B kept local)")
             print(f"Client {self.client_id}: A param names: {list(safe_A_params.keys())}")
+            
+            # Reset optimizer states after training to prevent momentum leakage between rounds
+            if self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
+                self.dp_optimizer.reset_optimizer_states()
+                print(f"Client {self.client_id}: DP optimizer states reset")
+            else:
+                # Reset standard optimizer state for fedsa
+                self.optimizer.state = {}
+                print(f"Client {self.client_id}: Standard optimizer state reset")
         else:
             raise ValueError(f"Unsupported aggregation method: {self.aggregation_method}. This script only supports 'fedsa' and 'fedsa_shareA_dp'.")
         
@@ -428,8 +439,9 @@ def main():
     
     # Prepare data
     print("\nPreparing federated data...")
-    # Ensure ResNet-specific transforms are used
+    # Use CIFAR-optimized ResNet with 32x32 input
     config['data']['model_type'] = 'resnet'
+    config['data']['use_cifar_resnet'] = True  # Enable CIFAR-optimized transforms
     trainset, testset, client_train_indices, client_test_indices = prepare_federated_data(config['data'])
     
     # Prepare Mixup/CutMix if enabled
@@ -460,17 +472,22 @@ def main():
         num_workers=config['data'].get('num_workers', 0)
     )
     
-    # Initialize server
-    print("Initializing federated server...")
-    server = FedSAFTLServer(device)
-    
-    # Create model and get statistics
-    print(f"Creating {config['model']['model_name']} model...")
+    # Create initial global model for A matrix synchronization
+    print(f"Creating CIFAR-optimized {config['model']['model_name']} model with LoRA (32x32 input)...")
     # Add seed to model config for reproducible LoRA initialization
     model_config = config['model'].copy()
     model_config['seed'] = config.get('seed', 42)
-    temp_model = create_model_resnet(model_config)
-    temp_client = ResNetFedSAFTLClient(0, temp_model, device, config)
+    initial_model = create_cifar_resnet_lora(model_config)
+    
+    # Initialize server
+    print("Initializing federated server...")
+    server = FedSAFTLServer(device)
+    # Set initial global A parameters for synchronization
+    server.global_A_params = initial_model.get_A_parameters()
+    print(f"✅ Server initialized with global A matrices from seed {config.get('seed', 42)}")
+    
+    # Create temp client for statistics
+    temp_client = ResNetFedSAFTLClient(0, initial_model, device, config)
     model_stats = temp_client.get_model_size()
     
     print("\nResNet Model Statistics:")
@@ -534,7 +551,11 @@ def main():
         # Add seed to model config for reproducible LoRA initialization
         model_config = config['model'].copy()
         model_config['seed'] = config.get('seed', 42)
-        client_model = create_model_resnet(model_config)
+        client_model = create_cifar_resnet_lora(model_config)
+        
+        # Synchronize A matrices with server's initial A parameters
+        client_model.set_A_parameters(server.global_A_params)
+        
         client = ResNetFedSAFTLClient(
             client_id, 
             client_model, 
@@ -544,6 +565,7 @@ def main():
         )
         clients.append(client)
     
+    print(f"✅ All {len(clients)} clients initialized with synchronized A matrices (B matrices remain local)")
     print("Starting ResNet federated training...")
     print("=" * 80)
     
@@ -642,7 +664,7 @@ def main():
             raise ValueError(f"Unsupported aggregation method: {aggregation_method}. This script only supports 'fedsa' and 'fedsa_shareA_dp'. Use quickstart_resnet_fedavg.py for standard FedAvg.")
         
         # FedSA: aggregate only A matrices
-        client_A_params = [update['lora_A_params'] for update in client_updates]
+        client_A_params = [update['A_params'] for update in client_updates]
         client_sample_counts = [update['local_data_size'] for update in client_updates]
         
         # Aggregate A matrices using weighted average
@@ -716,7 +738,7 @@ def main():
                 is_new_best = True
                 print(f"  ** New best personalized accuracy! **")
         
-        print(f"  Communication Cost: {round_stats.get('communication_cost_mb', 0):.2f} MB")
+        print(f"  Communication Cost (per-round): {round_stats.get('communication_cost_mb', 0):.2f} MB")
         
         # Save round results
         round_result = {
@@ -756,7 +778,7 @@ def main():
             round_stats_for_notification = {
                 'train_accuracy': avg_train_acc,
                 'test_accuracy': avg_personalized_acc,
-                'communication_cost_mb': round_stats.get('communication_cost_mb', 0)
+                'per_round_communication_mb': round_stats.get('communication_cost_mb', 0)
             }
             
             # Prepare server summary for notification
@@ -800,11 +822,15 @@ def main():
     # Complete results summary
     results['end_time'] = datetime.now().isoformat()
     results['training_duration_seconds'] = training_duration
+    total_comm_mb = sum(r['communication_cost_mb'] for r in results['rounds'])
+    avg_per_round_comm_mb = total_comm_mb / len(results['rounds']) if results['rounds'] else 0
+    
     results['summary'] = {
         'best_test_accuracy': best_accuracy,
         'best_round': best_round,
         'total_rounds': config['federated']['num_rounds'],
-        'total_communication_mb': sum(server.history['communication_cost']),  # Already in MB
+        'total_communication_mb': total_comm_mb,
+        'avg_per_round_communication_mb': avg_per_round_comm_mb,
         'final_avg_accuracy': avg_personalized_acc if 'avg_personalized_acc' in locals() else 0,
         'training_duration_hours': training_duration / 3600,
         'model_name': config['model']['model_name'],
@@ -831,7 +857,7 @@ def main():
                 'round': round_data['round'],
                 'train_accuracy': round_data['avg_train_accuracy'],
                 'test_accuracy': round_data['avg_personalized_accuracy'],
-                'communication_mb': round_data['communication_cost_mb'],
+                'per_round_communication_mb': round_data['communication_cost_mb'],
                 'is_best': round_data['is_best_round']
             })
         
@@ -858,7 +884,10 @@ def main():
     print(f"Model: {config['model']['model_name']}")
     print(f"Best Personalized Accuracy: {best_accuracy:.2f}% (Round {best_round})")
     print(f"Total Rounds: {config['federated']['num_rounds']}")
-    print(f"Total Communication: {sum(server.history['communication_cost']):.2f} MB")
+    total_comm_mb = sum(r['communication_cost_mb'] for r in results['rounds'])
+    avg_per_round_mb = total_comm_mb / len(results['rounds']) if results['rounds'] else 0
+    print(f"Total Communication: {total_comm_mb:.2f} MB")
+    print(f"Average per-round: {avg_per_round_mb:.2f} MB/round")
     print(f"Training Duration: {training_duration / 3600:.2f} hours")
     print(f"Results saved to: {experiment_dir}")
     print(f"  - Training results: final_results_{date_resnet_suffix}.json")
@@ -878,12 +907,16 @@ def main():
             'privacy': config.get('privacy', {})
         }
         
+        total_comm_final = sum(r['communication_cost_mb'] for r in results['rounds'])
+        avg_per_round_final = total_comm_final / len(results['rounds']) if results['rounds'] else 0
+        
         summary_for_notification = {
             'final_avg_accuracy': avg_personalized_acc if 'avg_personalized_acc' in locals() else 0,
             'final_std_accuracy': 0,  # Can calculate from individual client results if needed
             'best_test_accuracy': best_accuracy,
             'total_rounds': config['federated']['num_rounds'],
-            'total_communication_mb': sum(server.history['communication_cost'])  # Already in MB
+            'total_communication_mb': total_comm_final,
+            'avg_per_round_communication_mb': avg_per_round_final
         }
         
         slack_notifier.send_training_complete(

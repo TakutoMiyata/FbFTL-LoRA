@@ -44,49 +44,25 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 # Import from src modules
 from data_utils import prepare_federated_data, get_client_dataloader, MixupCutmixCollate
 from notification_utils import SlackNotifier
+from cifar_resnet import create_cifar_resnet  # Import CIFAR-optimized ResNet
 
 
 class StandardResNet(nn.Module):
-    """Standard ResNet without LoRA for FedAvg"""
+    """CIFAR-optimized ResNet without LoRA for FedAvg"""
     
-    def __init__(self, model_name='resnet18', num_classes=100, pretrained=True):
+    def __init__(self, model_name='resnet18', num_classes=100, pretrained=False):
         super().__init__()
         
-        # Load base model
-        if model_name == 'resnet18':
-            self.model = models.resnet18(pretrained=pretrained)
-        elif model_name == 'resnet34':
-            self.model = models.resnet34(pretrained=pretrained)
-        elif model_name == 'resnet50':
-            self.model = models.resnet50(pretrained=pretrained)
-        elif model_name == 'resnet101':
-            self.model = models.resnet101(pretrained=pretrained)
-        elif model_name == 'resnet152':
-            self.model = models.resnet152(pretrained=pretrained)
-        else:
-            raise ValueError(f"Unsupported model: {model_name}")
-        
-        # Replace final classifier for CIFAR-100
-        self.model.fc = nn.Linear(self.model.fc.in_features, num_classes)
+        # Use CIFAR-optimized ResNet (32x32 input, no maxpool)
+        self.model = create_cifar_resnet(model_name, num_classes, pretrained=False)
+        # Note: CIFAR ResNet doesn't use ImageNet pretrained weights
         
     def forward(self, x):
         return self.model(x)
     
     def extract_features(self, x):
         """Extract features before the final classifier"""
-        x = self.model.conv1(x)
-        x = self.model.bn1(x)
-        x = self.model.relu(x)
-        x = self.model.maxpool(x)
-        
-        x = self.model.layer1(x)
-        x = self.model.layer2(x)
-        x = self.model.layer3(x)
-        x = self.model.layer4(x)
-        
-        x = self.model.avgpool(x)
-        x = torch.flatten(x, 1)
-        return x
+        return self.model.extract_features(x)
 
 
 class FedAvgClient:
@@ -324,7 +300,7 @@ def main():
     print(f"Rounds: {config['federated']['num_rounds']}")
     print("=" * 80)
     
-    # Set seed for reproducibility
+    # Set seed for reproducibility BEFORE model creation
     if 'seed' in config:
         seed = config['seed']
         torch.manual_seed(seed)
@@ -332,6 +308,8 @@ def main():
         random.seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
+        
+        print(f"🔒 Random seed set to {seed} for reproducible model initialization")
         
         if config.get('reproducibility', {}).get('deterministic', False):
             torch.backends.cudnn.deterministic = True
@@ -342,6 +320,7 @@ def main():
     # Prepare data
     print("\nPreparing federated data...")
     config['data']['model_type'] = 'resnet'
+    config['data']['use_cifar_resnet'] = True  # Enable CIFAR-optimized transforms (32x32)
     trainset, testset, client_train_indices, client_test_indices = prepare_federated_data(config['data'])
     
     # Prepare Mixup/CutMix if enabled
@@ -362,14 +341,17 @@ def main():
             num_classes=num_classes
         )
     
-    # Initialize server
+    # Create initial global model 
+    print(f"Creating initial global {config['model']['model_name']} model...")
+    global_model = create_model(config['model'])
+    
+    # Initialize server with global model
     print("Initializing FedAvg server...")
     server = FedAvgServer(device)
+    server.global_model_state = global_model.state_dict()  # Set initial global state
     
     # Create model for statistics
-    print(f"Creating {config['model']['model_name']} model...")
-    temp_model = create_model(config['model'])
-    temp_client = FedAvgClient(0, temp_model, device)
+    temp_client = FedAvgClient(0, global_model, device)
     model_stats = temp_client.get_model_size()
     
     print("\nStandard ResNet Model Statistics:")
@@ -378,6 +360,7 @@ def main():
     print(f"  Trainable parameters: {model_stats['trainable_params']:,}")
     print(f"  Communication overhead: {model_stats['communication_params']:,} parameters/round")
     print(f"  No LoRA adapters - Full model aggregation")
+    print(f"  Initial model synchronized across all clients")
     
     # Initialize Slack notifier
     slack_notifier = None
@@ -388,14 +371,18 @@ def main():
     else:
         print("Slack notifications disabled (set SLACK_WEBHOOK_URL environment variable to enable)")
     
-    # Create clients
+    # Create clients with synchronized initial model
     print(f"Creating {config['federated']['num_clients']} FedAvg clients...")
     clients = []
     
     for client_id in range(config['federated']['num_clients']):
+        # Create model and load the same initial state as server
         client_model = create_model(config['model'])
+        client_model.load_state_dict(server.global_model_state)  # Sync with initial global model
         client = FedAvgClient(client_id, client_model, device)
         clients.append(client)
+    
+    print(f"✅ All {len(clients)} clients initialized with synchronized global model")
     
     # Create experiment directory
     current_date = datetime.now().strftime('%m%d')
@@ -453,10 +440,12 @@ def main():
                 num_workers=config['data'].get('num_workers', 0)
             )
             
-            # Update with global model
+            # Update with global model (always available since server is initialized with model)
             global_state = server.get_global_model_state()
             if global_state:
                 clients[client_id].update_model(global_state)
+            else:
+                print(f"WARNING: No global model state available for client {client_id}")
             
             # Local training
             client_result = clients[client_id].train(client_dataloader, config['training'])

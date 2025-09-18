@@ -12,12 +12,13 @@ from typing import List, Tuple, Dict, Optional, Callable
 import random
 
 
-def get_cifar_transforms(model_type='vgg', augmentation_config=None):
+def get_cifar_transforms(model_type='vgg', augmentation_config=None, use_cifar_resnet=False):
     """Get CIFAR data transforms based on model type with enhanced augmentation
     
     Args:
-        model_type: 'vgg' for VGG models, 'vit' for Vision Transformers
+        model_type: 'vgg', 'vit', 'resnet', or other model types
         augmentation_config: Dict with augmentation settings
+        use_cifar_resnet: If True, use 32x32 for CIFAR-optimized ResNet
     """
     # Default augmentation config
     if augmentation_config is None:
@@ -26,16 +27,27 @@ def get_cifar_transforms(model_type='vgg', augmentation_config=None):
     # Build training transforms based on configuration
     train_transforms = []
     
-    # Always resize to 224x224 for both VGG and ViT
-    train_transforms.append(transforms.Resize((224, 224)))
+    # Resize based on model requirements
+    if use_cifar_resnet:
+        # CIFAR-optimized ResNet uses native 32x32 resolution
+        pass  # No resize needed
+    else:
+        # ImageNet-pretrained models need 224x224
+        train_transforms.append(transforms.Resize((224, 224)))
     
     # Random Crop with padding (if enabled)
     if augmentation_config.get('random_crop', {}).get('enabled', False):
         crop_config = augmentation_config['random_crop']
-        # For CIFAR images already resized to 224, we can apply RandomCrop with padding
-        train_transforms.append(
-            transforms.RandomCrop(224, padding=crop_config.get('padding', 4))
-        )
+        if use_cifar_resnet:
+            # For CIFAR-optimized ResNet, crop at 32x32
+            train_transforms.append(
+                transforms.RandomCrop(32, padding=crop_config.get('padding', 4))
+            )
+        else:
+            # For ImageNet models, crop at 224x224
+            train_transforms.append(
+                transforms.RandomCrop(224, padding=crop_config.get('padding', 4))
+            )
     
     # Horizontal Flip
     if augmentation_config.get('horizontal_flip', {}).get('enabled', True):
@@ -80,17 +92,25 @@ def get_cifar_transforms(model_type='vgg', augmentation_config=None):
     
     # Normalize (ImageNet statistics)
     train_transforms.append(
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Normalize(mean=[0.507, 0.487, 0.441], std=[0.267, 0.256, 0.276])
     )
     
     transform_train = transforms.Compose(train_transforms)
     
     # Test transforms (minimal augmentation)
-    transform_test = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
+    if use_cifar_resnet:
+        # CIFAR-optimized ResNet: no resize needed
+        transform_test = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.507, 0.487, 0.441], std=[0.267, 0.256, 0.276])
+        ])
+    else:
+        # ImageNet models: resize to 224x224
+        transform_test = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.507, 0.487, 0.441], std=[0.267, 0.256, 0.276])
+        ])
     
     return transform_train, transform_test
 
@@ -197,16 +217,17 @@ class MixupCutmixCollate:
         self.training = mode
 
 
-def load_cifar_data(dataset_name='cifar100', data_dir='./data', model_type='vgg', augmentation_config=None):
+def load_cifar_data(dataset_name='cifar100', data_dir='./data', model_type='vgg', augmentation_config=None, use_cifar_resnet=False):
     """Load CIFAR dataset with augmentation support
     
     Args:
         dataset_name: 'cifar10' or 'cifar100'
         data_dir: Directory to store/load data
-        model_type: 'vgg' or 'vit' for appropriate transforms
+        model_type: 'vgg', 'vit', 'resnet' for appropriate transforms
         augmentation_config: Configuration for data augmentation
+        use_cifar_resnet: If True, use 32x32 for CIFAR-optimized ResNet
     """
-    transform_train, transform_test = get_cifar_transforms(model_type, augmentation_config)
+    transform_train, transform_test = get_cifar_transforms(model_type, augmentation_config, use_cifar_resnet)
     
     if dataset_name.lower() == 'cifar100':
         trainset = torchvision.datasets.CIFAR100(
@@ -374,12 +395,14 @@ def prepare_federated_data(config: Dict):
     dataset_name = config.get('dataset_name', 'cifar100')
     model_type = config.get('model_type', 'vgg')
     augmentation_config = config.get('augmentations', {})
+    use_cifar_resnet = config.get('use_cifar_resnet', False)
     
     trainset, testset = load_cifar_data(
         dataset_name, 
         config.get('data_dir', './data'), 
         model_type,
-        augmentation_config
+        augmentation_config,
+        use_cifar_resnet
     )
     
     # Determine number of classes based on dataset

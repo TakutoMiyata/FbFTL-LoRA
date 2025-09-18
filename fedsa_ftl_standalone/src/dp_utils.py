@@ -106,12 +106,15 @@ class DPOptimizer:
         """
         Efficient per-sample gradient clipping for A parameters with optional B gradients
         
+        NOTE: This method handles gradients internally. 
+        External optimizer.zero_grad() calls are NOT needed before calling this method.
+        
         Args:
             loss_vec: Individual losses with shape [batch] (reduction='none')
             microbatch_size: Size of microbatches for per-sample processing
             also_compute_B_grads: If True, also compute regular gradients for B parameters
         """
-        # Clear all gradients first
+        # Clear all gradients first - this method handles gradient clearing internally
         self.A_optimizer.zero_grad(set_to_none=True)
         if also_compute_B_grads:
             self.B_optimizer.zero_grad(set_to_none=True)
@@ -122,10 +125,12 @@ class DPOptimizer:
         
         n = loss_vec.shape[0]
         num_microbatches = 0
+        is_last_microbatch = False
         
         # Process microbatches for A parameters with DP
         for start in range(0, n, microbatch_size):
             end = min(n, start + microbatch_size)
+            is_last_microbatch = (end >= n)
             micro_loss = loss_vec[start:end].mean()
             
             # Zero only A gradients for this microbatch
@@ -133,8 +138,9 @@ class DPOptimizer:
                 if p.grad is not None:
                     p.grad.zero_()
             
-            # Backward pass for this microbatch
-            micro_loss.backward(retain_graph=True)
+            # Backward pass - retain graph unless it's the last microbatch AND we're not computing B grads
+            retain_graph = not (is_last_microbatch and not also_compute_B_grads)
+            micro_loss.backward(retain_graph=retain_graph)
             
             # Calculate L2 norm for A parameters only
             total_norm = 0.0
@@ -174,18 +180,38 @@ class DPOptimizer:
                     )
                     p.grad.add_(noise)
         
-        # Compute B gradients efficiently (single backward pass)
+        # Compute B gradients efficiently (single backward pass) - completely separate from A processing
         if also_compute_B_grads:
-            # Zero B gradients and compute from mean loss
+            # Zero B gradients explicitly
             for p in self.B_params:
                 if p.grad is not None:
                     p.grad.zero_()
             
+            # Fresh backward pass for B gradients using mean loss
             mean_loss = loss_vec.mean()
-            mean_loss.backward()
+            mean_loss.backward()  # No retain_graph needed as this is the final backward
         
         # Update step counter
         self.steps += 1
+    
+    def reset_optimizer_states(self):
+        """
+        Reset optimizer states after each training round to prevent
+        momentum/state leakage between rounds in federated learning
+        """
+        # Reset A optimizer state
+        self.A_optimizer.state = {}
+        
+        # Reset B optimizer state
+        self.B_optimizer.state = {}
+    
+    def manual_zero_grad(self, set_to_none: bool = True):
+        """
+        Manual gradient zeroing for external control
+        WARNING: Only use this if you're NOT calling dp_backward_on_loss_efficient()
+        """
+        self.A_optimizer.zero_grad(set_to_none=set_to_none)
+        self.B_optimizer.zero_grad(set_to_none=set_to_none)
     
     # Keep old method for backwards compatibility
     def dp_backward_on_loss(self, loss_vec: torch.Tensor, microbatch_size: int = 8):
