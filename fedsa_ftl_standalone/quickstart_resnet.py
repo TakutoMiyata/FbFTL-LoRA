@@ -727,11 +727,15 @@ def main():
             
             # Aggregate each parameter
             for param_name in first_state.keys():
-                aggregated_param = torch.zeros_like(first_state[param_name])
+                aggregated_param = torch.zeros_like(first_state[param_name], dtype=torch.float32)
                 for client_update, weight in zip(client_updates, weights):
                     if param_name in client_update['model_state']:
-                        aggregated_param += weight * client_update['model_state'][param_name]
-                aggregated_state[param_name] = aggregated_param
+                        # Convert to float32 for aggregation, then convert back to original dtype
+                        param_data = client_update['model_state'][param_name].float()
+                        aggregated_param += weight * param_data
+                # Convert back to original dtype
+                original_dtype = first_state[param_name].dtype
+                aggregated_state[param_name] = aggregated_param.to(original_dtype)
             
             # Update server's global model (for FedAvg, server stores full model)
             if not hasattr(server, 'global_model_state'):
