@@ -45,6 +45,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from data_utils import prepare_federated_data, get_client_dataloader, MixupCutmixCollate
 from notification_utils import SlackNotifier
 from cifar_resnet import create_cifar_resnet  # Import CIFAR-optimized ResNet
+from backbones_imagenet import make_model_with_lora, print_model_summary
+import math
 
 
 class StandardResNet(nn.Module):
@@ -261,12 +263,22 @@ class FedAvgServer:
 
 
 def create_model(config):
-    """Create standard ResNet model"""
-    return StandardResNet(
-        model_name=config.get('model_name', 'resnet18'),
-        num_classes=config.get('num_classes', 100),
-        pretrained=config.get('pretrained', True)
-    )
+    """Create model based on configuration"""
+    # Check if using ImageNet-style models
+    use_imagenet_style = config.get('data', {}).get('imagenet_style', False)
+    
+    if use_imagenet_style:
+        # Use ImageNet pre-trained models (NO LoRA for FedAvg baseline)
+        model_config = config.copy()
+        model_config['model']['lora'] = {'enabled': False}  # Disable LoRA for FedAvg
+        return make_model_with_lora(model_config)
+    else:
+        # Use CIFAR-optimized ResNet (legacy)
+        return StandardResNet(
+            model_name=config['model'].get('model_name', 'resnet18'),
+            num_classes=config['model'].get('num_classes', 100),
+            pretrained=config['model'].get('pretrained', True)
+        )
 
 
 def main():
@@ -330,10 +342,20 @@ def main():
         else:
             torch.backends.cudnn.benchmark = True
     
-    # Prepare data
+    # Prepare data with appropriate transforms
     print("\nPreparing federated data...")
-    config['data']['model_type'] = 'resnet'
-    config['data']['use_cifar_resnet'] = True  # Enable CIFAR-optimized transforms (32x32)
+    
+    # Configure data transforms based on model type
+    use_imagenet_style = config['data'].get('imagenet_style', False)
+    if use_imagenet_style:
+        print("Using ImageNet-style transforms (224x224)")
+        config['data']['model_type'] = 'imagenet'
+        config['data']['use_cifar_resnet'] = False
+    else:
+        print("Using CIFAR-optimized transforms (32x32)")
+        config['data']['model_type'] = 'resnet'
+        config['data']['use_cifar_resnet'] = True
+    
     trainset, testset, client_train_indices, client_test_indices = prepare_federated_data(config['data'])
     
     # Prepare Mixup/CutMix if enabled
@@ -355,8 +377,14 @@ def main():
         )
     
     # Create initial global model 
-    print(f"Creating initial global {config['model']['model_name']} model...")
-    global_model = create_model(config['model'])
+    # Create model based on configuration
+    if use_imagenet_style:
+        print(f"Creating ImageNet-style {config['model']['model_name']} model...")
+        global_model = create_model(config)
+        print_model_summary(config, global_model)
+    else:
+        print(f"Creating CIFAR-optimized {config['model']['model_name']} model...")
+        global_model = create_model(config)
     
     # Initialize server with global model
     print("Initializing FedAvg server...")

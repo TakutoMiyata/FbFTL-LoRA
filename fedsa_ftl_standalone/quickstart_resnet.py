@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 # Now import from src modules
 from cifar_resnet_lora import create_cifar_resnet_lora
+from backbones_imagenet import make_model_with_lora, print_model_summary
 from fedsa_ftl_client import FedSAFTLClient
 from fedsa_ftl_server import FedSAFTLServer
 from data_utils import prepare_federated_data, get_client_dataloader, MixupCutmixCollate
@@ -47,6 +48,7 @@ from privacy_utils import DifferentialPrivacy
 from notification_utils import SlackNotifier
 from dp_utils import create_dp_optimizer, WeightedFedAvg
 import torch.nn.functional as F
+import math
 
 
 class ResNetFedSAFTLClient(FedSAFTLClient):
@@ -450,11 +452,20 @@ def main():
         else:
             torch.backends.cudnn.benchmark = True
     
-    # Prepare data
+    # Prepare data with appropriate transforms
     print("\nPreparing federated data...")
-    # Use CIFAR-optimized ResNet with 32x32 input
-    config['data']['model_type'] = 'resnet'
-    config['data']['use_cifar_resnet'] = True  # Enable CIFAR-optimized transforms
+    
+    # Configure data transforms based on model type
+    use_imagenet_style = config['data'].get('imagenet_style', False)
+    if use_imagenet_style:
+        print("Using ImageNet-style transforms (224x224)")
+        config['data']['model_type'] = 'imagenet'
+        config['data']['use_cifar_resnet'] = False
+    else:
+        print("Using CIFAR-optimized transforms (32x32)")
+        config['data']['model_type'] = 'resnet'
+        config['data']['use_cifar_resnet'] = True
+    
     trainset, testset, client_train_indices, client_test_indices = prepare_federated_data(config['data'])
     
     # Prepare Mixup/CutMix if enabled
@@ -486,12 +497,20 @@ def main():
         pin_memory=True
     )
     
-    # Create initial global model for A matrix synchronization
-    print(f"Creating CIFAR-optimized {config['model']['model_name']} model with LoRA (32x32 input)...")
-    # Add seed to model config for reproducible LoRA initialization
-    model_config = config['model'].copy()
-    model_config['seed'] = config.get('seed', 42)
-    initial_model = create_cifar_resnet_lora(model_config)
+    # Create initial global model
+    use_imagenet_style = config['data'].get('imagenet_style', False)
+    
+    if use_imagenet_style:
+        # Use ImageNet-style backbone with LoRA
+        print(f"Creating ImageNet-style {config['model']['model_name']} model...")
+        initial_model = make_model_with_lora(config)
+        print_model_summary(config, initial_model)
+    else:
+        # Use CIFAR-optimized ResNet with LoRA (legacy)
+        print(f"Creating CIFAR-optimized {config['model']['model_name']} model with LoRA (32x32 input)...")
+        model_config = config['model'].copy()
+        model_config['seed'] = config.get('seed', 42)
+        initial_model = create_cifar_resnet_lora(model_config)
     
     # Initialize server
     print("Initializing federated server...")
@@ -562,13 +581,21 @@ def main():
                 total_rounds=config['federated'].get('num_rounds', 100)
             )
         
-        # Add seed to model config for reproducible LoRA initialization
-        model_config = config['model'].copy()
-        model_config['seed'] = config.get('seed', 42)
-        client_model = create_cifar_resnet_lora(model_config)
+        # Create client model (same architecture as initial model)
+        if use_imagenet_style:
+            client_model = make_model_with_lora(config)
+        else:
+            model_config = config['model'].copy()
+            model_config['seed'] = config.get('seed', 42)
+            client_model = create_cifar_resnet_lora(model_config)
         
-        # Synchronize A matrices with server's initial A parameters
-        client_model.set_A_parameters(server.global_A_params)
+        # Synchronize with server's initial parameters
+        if hasattr(server, 'global_A_params'):
+            if hasattr(client_model, 'set_A_parameters'):
+                client_model.set_A_parameters(server.global_A_params)
+            else:
+                # For ImageNet models, load full state dict (can be optimized later)
+                client_model.load_state_dict(initial_model.state_dict())
         
         client = ResNetFedSAFTLClient(
             client_id, 

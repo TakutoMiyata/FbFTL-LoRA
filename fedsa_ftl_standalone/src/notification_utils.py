@@ -139,11 +139,17 @@ class SlackNotifier:
         seconds = int(duration_seconds % 60)
         duration_str = f"{hours}h {minutes}m {seconds}s"
         
-        # Extract key metrics
-        final_accuracy = summary.get('final_avg_accuracy')  # None if not available
+        # Extract key metrics with safe defaults
+        final_accuracy = summary.get('final_avg_accuracy')
         final_std = summary.get('final_std_accuracy', 0)
         best_accuracy = summary.get('best_test_accuracy', 0)
         total_comm_mb = summary.get('total_communication_mb', 0)
+        
+        # Handle None values safely
+        if final_accuracy is None:
+            final_accuracy = best_accuracy if best_accuracy > 0 else 0
+        if final_std is None:
+            final_std = 0
         
         # Determine status emoji based on accuracy
         if final_accuracy is None:
@@ -206,7 +212,7 @@ class SlackNotifier:
                 "fields": [
                     {
                         "type": "mrkdwn",
-                        "text": f"*Final Accuracy:*\n{final_accuracy:.2f}% ± {final_std:.2f}%" if final_accuracy is not None else "*Final Accuracy:*\nN/A"
+                        "text": f"*Final Accuracy:*\n{final_accuracy:.2f}% ± {final_std:.2f}%"
                     },
                     {
                         "type": "mrkdwn",

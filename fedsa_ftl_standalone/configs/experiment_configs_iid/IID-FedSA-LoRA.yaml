@@ -13,6 +13,16 @@ communication:
   quantization_bits: null
 data:
   alpha: 0.5
+  dataset_name: cifar100
+  data_split: iid
+  input_size: 224
+  imagenet_style: true
+  batch_size: 512
+  data_dir: ./data
+  model_type: imagenet
+  num_clients: 10
+  num_workers: 8
+  verbose: false
   augmentations:
     color_jitter:
       brightness: 0.2
@@ -32,7 +42,7 @@ data:
       enabled: false
       prob: 0.5
     random_crop:
-      enabled: true
+      enabled: false
       padding: 4
     random_erasing:
       enabled: false
@@ -40,14 +50,9 @@ data:
     random_rotation:
       degrees: 15
       enabled: false
-  batch_size: 128
-  data_dir: ./data
-  data_split: iid
-  dataset_name: cifar100
-  model_type: resnet
-  num_clients: 10
-  num_workers: 4
-  verbose: false
+    random_resized_crop:
+      enabled: true
+      scale_min: 0.5
 evaluation:
   eval_freq: 5
   metric: accuracy
@@ -68,13 +73,17 @@ federated:
   client_fraction: 1.0
   num_clients: 10
   num_rounds: 100
+  exclude_bn_from_agg: true
 model:
-  lora_alpha: 16
-  lora_dropout: 0.1
-  lora_r: 16
-  model_name: resnet18
+  model_name: mobilenet_v2
   num_classes: 100
-  pretrained: false
+  pretrained: true
+  freeze_backbone: true
+  lora:
+    enabled: true
+    r: 8
+    alpha: 16
+    dropout: 0.1
 privacy:
   delta: 1.0e-05
   enable_privacy: false
@@ -87,13 +96,15 @@ reproducibility:
   deterministic: false
 seed: 42
 training:
-  epochs: 3
-  gradient_clip: 1.0
-  lr: 0.01
-  microbatch_size: 8
-  momentum: 0.9
-  optimizer: sgd
+  epochs: 1
+  lr: 0.03
+  weight_decay: 0.0005
   scheduler: cosine
   warmup_epochs: 2
-  weight_decay: 0.0005
+  label_smoothing: 0.1
+  gradient_clip: 1.0
+  optimizer: sgd
+  momentum: 0.9
+  microbatch_size: 8
 use_gpu: true
+use_amp: true

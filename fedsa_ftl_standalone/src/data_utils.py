@@ -1,15 +1,56 @@
 """
 Data utilities for CIFAR-10/CIFAR-100 with non-IID split
 Enhanced with advanced data augmentation including Mixup and CutMix
+Supports both CIFAR-optimized and ImageNet-style transforms
 """
 
 import torch
 import torchvision
 import torchvision.transforms as transforms
+from torchvision import transforms as T
 from torch.utils.data import DataLoader, Subset
 import numpy as np
 from typing import List, Tuple, Dict, Optional, Callable
 import random
+
+# ImageNet normalization constants
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+
+
+def build_imagenet_transforms(input_size=224, augment=True):
+    """Build ImageNet-style transforms for transfer learning
+    
+    Args:
+        input_size: Target input size (default: 224)
+        augment: Whether to apply data augmentation for training
+    
+    Returns:
+        train_transform, test_transform
+    """
+    if augment:
+        train = T.Compose([
+            T.RandomResizedCrop(input_size, scale=(0.5, 1.0)),
+            T.RandomHorizontalFlip(),
+            T.ToTensor(),
+            T.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+        ])
+    else:
+        train = T.Compose([
+            T.Resize(int(input_size * 256 / 224)),
+            T.CenterCrop(input_size),
+            T.ToTensor(),
+            T.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+        ])
+    
+    test = T.Compose([
+        T.Resize(int(input_size * 256 / 224)),
+        T.CenterCrop(input_size),
+        T.ToTensor(),
+        T.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+    ])
+    
+    return train, test
 
 
 def get_cifar_transforms(model_type='vgg', augmentation_config=None, use_cifar_resnet=False):
@@ -217,7 +258,7 @@ class MixupCutmixCollate:
         self.training = mode
 
 
-def load_cifar_data(dataset_name='cifar100', data_dir='./data', model_type='vgg', augmentation_config=None, use_cifar_resnet=False):
+def load_cifar_data(dataset_name='cifar100', data_dir='./data', model_type='vgg', augmentation_config=None, use_cifar_resnet=False, imagenet_style=False, input_size=224):
     """Load CIFAR dataset with augmentation support
     
     Args:
@@ -226,8 +267,16 @@ def load_cifar_data(dataset_name='cifar100', data_dir='./data', model_type='vgg'
         model_type: 'vgg', 'vit', 'resnet' for appropriate transforms
         augmentation_config: Configuration for data augmentation
         use_cifar_resnet: If True, use 32x32 for CIFAR-optimized ResNet
+        imagenet_style: If True, use ImageNet-style transforms (224x224)
+        input_size: Input size for ImageNet-style transforms
     """
-    transform_train, transform_test = get_cifar_transforms(model_type, augmentation_config, use_cifar_resnet)
+    if imagenet_style:
+        # Use ImageNet-style transforms for transfer learning
+        augment = augmentation_config is not None and len(augmentation_config) > 0
+        transform_train, transform_test = build_imagenet_transforms(input_size, augment)
+    else:
+        # Use CIFAR-optimized transforms
+        transform_train, transform_test = get_cifar_transforms(model_type, augmentation_config, use_cifar_resnet)
     
     if dataset_name.lower() == 'cifar100':
         trainset = torchvision.datasets.CIFAR100(
@@ -317,7 +366,7 @@ def create_iid_splits(dataset, num_clients: int) -> List[List[int]]:
 
 def get_client_dataloader(dataset, client_indices: List[int], batch_size: int, 
                           shuffle: bool = True, collate_fn: Optional[Callable] = None,
-                          num_workers: int = 0) -> DataLoader:
+                          num_workers: int = 0, optimized: bool = False) -> DataLoader:
     """
     Create DataLoader for a specific client with optional Mixup/CutMix
     
@@ -328,19 +377,35 @@ def get_client_dataloader(dataset, client_indices: List[int], batch_size: int,
         shuffle: Whether to shuffle data
         collate_fn: Optional collate function for Mixup/CutMix
         num_workers: Number of workers for data loading
+        optimized: If True, use optimized DataLoader settings for performance
     
     Returns:
         DataLoader for the client
     """
     client_dataset = Subset(dataset, client_indices)
-    return DataLoader(
-        client_dataset, 
-        batch_size=batch_size, 
-        shuffle=shuffle,
-        collate_fn=collate_fn,
-        num_workers=num_workers,
-        pin_memory=True
-    )
+    
+    if optimized:
+        # Optimized settings for high-performance training
+        loader_kwargs = {
+            'batch_size': batch_size,
+            'num_workers': max(4, num_workers),  # Minimum 4 workers
+            'shuffle': shuffle,
+            'pin_memory': True,
+            'persistent_workers': True if num_workers > 0 else False,
+            'prefetch_factor': 2 if num_workers > 0 else 2,
+            'collate_fn': collate_fn
+        }
+    else:
+        # Standard settings
+        loader_kwargs = {
+            'batch_size': batch_size,
+            'shuffle': shuffle,
+            'collate_fn': collate_fn,
+            'num_workers': num_workers,
+            'pin_memory': True
+        }
+    
+    return DataLoader(client_dataset, **loader_kwargs)
 
 
 def analyze_data_distribution(dataset, client_indices: List[List[int]], num_classes: int = 100):
@@ -403,7 +468,9 @@ def prepare_federated_data(config: Dict):
         config.get('data_dir', './data'), 
         model_type,
         augmentation_config,
-        use_cifar_resnet
+        use_cifar_resnet,
+        imagenet_style=imagenet_style,
+        input_size=config.get('input_size', 224)
     )
     
     # Determine number of classes based on dataset
