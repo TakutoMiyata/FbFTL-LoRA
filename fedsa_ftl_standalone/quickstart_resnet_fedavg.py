@@ -274,10 +274,11 @@ def create_model(config):
         return make_model_with_lora(model_config)
     else:
         # Use CIFAR-optimized ResNet (legacy)
+        model_config = config.get('model', {})
         return StandardResNet(
-            model_name=config['model'].get('model_name', 'resnet18'),
-            num_classes=config['model'].get('num_classes', 100),
-            pretrained=config['model'].get('pretrained', True)
+            model_name=model_config.get('model_name', 'resnet18'),
+            num_classes=model_config.get('num_classes', 100),
+            pretrained=model_config.get('pretrained', True)
         )
 
 
@@ -418,7 +419,7 @@ def main():
     
     for client_id in range(config['federated']['num_clients']):
         # Create model and load the same initial state as server
-        client_model = create_model(config['model'])
+        client_model = create_model(config)
         client_model.load_state_dict(server.global_model_state)  # Sync with initial global model
         client = FedAvgClient(client_id, client_model, device)
         clients.append(client)
