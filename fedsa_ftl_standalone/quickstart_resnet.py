@@ -116,8 +116,11 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         num_epochs = training_config.get('epochs', 5)
         microbatch_size = training_config.get('microbatch_size', 8)  # For DP
         
-        # Setup AMP scaler only if use_amp is enabled
+        # Setup AMP scaler only if use_amp is enabled and model is not already half precision
+        # If model is already half precision, scaler is not needed
+        model_is_half = next(self.model.parameters()).dtype == torch.float16
         scaler = torch.amp.GradScaler('cuda') if (self.use_amp and torch.cuda.is_available() and 
+                                                  not model_is_half and
                                                   (self.aggregation_method not in ['fedsa_shareA_dp', 'fedsa'] or self.dp_optimizer is None)) else None
         
         for epoch in range(num_epochs):
