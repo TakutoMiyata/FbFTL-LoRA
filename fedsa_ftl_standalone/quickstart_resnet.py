@@ -135,6 +135,10 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             for batch_idx, (data, target) in enumerate(pbar):
                 data, target = data.to(self.device), target.to(self.device)
                 
+                # Convert input to half precision if model is half precision
+                if model_is_half:
+                    data = data.half()
+                
                 # Handle Mixup/CutMix targets
                 if len(target.shape) > 1:  # One-hot encoded (from Mixup/CutMix)
                     target_for_loss = target
