@@ -15,6 +15,7 @@ import random
 import json
 import time
 from datetime import datetime
+from tqdm import tqdm
 
 # Load environment variables from .env file
 def load_env_file(env_path='.env'):
@@ -120,7 +121,13 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         for epoch in range(num_epochs):
             epoch_loss = 0.0
             
-            for batch_idx, (data, target) in enumerate(dataloader):
+            # Add progress bar for batches
+            pbar = tqdm(dataloader, 
+                       desc=f"Client {self.client_id} - Epoch {epoch+1}/{num_epochs}",
+                       leave=False,
+                       unit="batch")
+            
+            for batch_idx, (data, target) in enumerate(pbar):
                 data, target = data.to(self.device), target.to(self.device)
                 
                 # Handle Mixup/CutMix targets
@@ -184,6 +191,13 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 pred = output.argmax(dim=1, keepdim=True)
                 correct += pred.eq(target_for_acc.view_as(pred)).sum().item()
                 total += target_for_acc.size(0)
+                
+                # Update progress bar with current metrics
+                pbar.set_postfix({
+                    'loss': f'{loss.item():.4f}',
+                    'avg_loss': f'{epoch_loss/(batch_idx+1):.4f}',
+                    'acc': f'{100.*correct/total:.2f}%'
+                })
             
             total_loss += epoch_loss
         
@@ -620,8 +634,14 @@ def main():
     best_round = 0
     start_time = time.time()
     
-    for round_idx in range(config['federated']['num_rounds']):
+    # Create main progress bar for rounds
+    round_pbar = tqdm(range(config['federated']['num_rounds']), 
+                     desc="Federated Rounds",
+                     unit="round")
+    
+    for round_idx in round_pbar:
         print(f"\n[Round {round_idx + 1}/{config['federated']['num_rounds']}]")
+        round_start_time = time.time()
         
         # Select clients based on client_fraction
         client_fraction = config['federated'].get('client_fraction', 1.0)
@@ -641,7 +661,14 @@ def main():
         client_updates = []
         train_accuracies = []
         
-        for client_id in selected_clients:
+        # Create progress bar for client training
+        client_pbar = tqdm(selected_clients, 
+                          desc="Training clients",
+                          leave=False,
+                          unit="client")
+        
+        for client_id in client_pbar:
+            client_pbar.set_description(f"Training client {client_id}")
             # Get client training data with optional Mixup/CutMix
             client_dataloader = get_client_dataloader(
                 trainset,
@@ -767,7 +794,9 @@ def main():
             'aggregation_method': aggregation_method
         }
         
-        # Print summary
+        # Print summary with timing
+        round_time = time.time() - round_start_time
+        total_time = time.time() - start_time
         avg_train_acc = sum(train_accuracies) / len(train_accuracies)
         
         print(f"\nRound {round_idx + 1} Summary:")
@@ -785,6 +814,24 @@ def main():
                 print(f"  ** New best personalized accuracy! **")
         
         print(f"  Communication Cost (per-round): {round_stats.get('communication_cost_mb', 0):.2f} MB")
+        print(f"  Round time: {round_time:.2f}s")
+        print(f"  Total time: {total_time:.2f}s")
+        
+        # Estimate remaining time
+        rounds_completed = round_idx + 1
+        if rounds_completed > 0:
+            avg_round_time = total_time / rounds_completed
+            remaining_rounds = config['federated']['num_rounds'] - rounds_completed
+            estimated_remaining = avg_round_time * remaining_rounds
+            print(f"  Estimated remaining time: {estimated_remaining:.0f}s ({estimated_remaining/60:.1f} min)")
+        
+        # Update main progress bar
+        round_pbar.set_postfix({
+            'train_acc': f'{avg_train_acc:.2f}%',
+            'test_acc': f'{avg_personalized_acc:.2f}%' if avg_personalized_acc else 'N/A',
+            'best': f'{best_accuracy:.2f}%',
+            'time': f'{round_time:.1f}s'
+        })
         
         # Save round results
         round_result = {
