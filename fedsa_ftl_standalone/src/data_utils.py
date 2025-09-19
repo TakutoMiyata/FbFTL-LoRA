@@ -462,6 +462,8 @@ def prepare_federated_data(config: Dict):
     model_type = config.get('model_type', 'vgg')
     augmentation_config = config.get('augmentations', {})
     use_cifar_resnet = config.get('use_cifar_resnet', False)
+    imagenet_style = config.get('imagenet_style', False)  # Get ImageNet style flag
+    input_size = config.get('input_size', 224)
     
     trainset, testset = load_cifar_data(
         dataset_name, 
@@ -470,7 +472,7 @@ def prepare_federated_data(config: Dict):
         augmentation_config,
         use_cifar_resnet,
         imagenet_style=imagenet_style,
-        input_size=config.get('input_size', 224)
+        input_size=input_size
     )
     
     # Determine number of classes based on dataset
