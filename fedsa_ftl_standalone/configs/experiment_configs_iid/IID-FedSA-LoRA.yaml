@@ -96,7 +96,7 @@ reproducibility:
   deterministic: false
 seed: 42
 training:
-  epochs: 3
+  epochs: 1
   lr: 0.1  # Scaled with larger batch size (256)
   weight_decay: 0.0005
   scheduler: cosine
@@ -107,4 +107,4 @@ training:
   momentum: 0.9
   microbatch_size: 8
 use_gpu: true
-use_amp: true
+use_amp: false
