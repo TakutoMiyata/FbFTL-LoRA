@@ -115,7 +115,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         microbatch_size = training_config.get('microbatch_size', 8)  # For DP
         
         # Setup AMP scaler for non-DP training
-        scaler = torch.cuda.amp.GradScaler() if self.aggregation_method not in ['fedsa_shareA_dp', 'fedsa'] or self.dp_optimizer is None else None
+        scaler = torch.amp.GradScaler('cuda') if torch.cuda.is_available() and (self.aggregation_method not in ['fedsa_shareA_dp', 'fedsa'] or self.dp_optimizer is None) else None
         
         for epoch in range(num_epochs):
             epoch_loss = 0.0
@@ -132,7 +132,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     target_for_acc = target
                 
                 # Use autocast for forward pass (both DP and non-DP cases)
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda', enabled=scaler is not None):
                     output = self.model(data)
                 
                 # Calculate loss with proper reduction for DP
@@ -504,6 +504,7 @@ def main():
         # Use ImageNet-style backbone with LoRA
         print(f"Creating ImageNet-style {config['model']['model_name']} model...")
         initial_model = make_model_with_lora(config)
+        initial_model = initial_model.to(device)  # Move to GPU
         print_model_summary(config, initial_model)
     else:
         # Use CIFAR-optimized ResNet with LoRA (legacy)
@@ -587,6 +588,7 @@ def main():
         # Create client model (same architecture as initial model)
         if use_imagenet_style:
             client_model = make_model_with_lora(config)
+            client_model = client_model.to(device)  # Move to GPU
         else:
             model_config = config['model'].copy()
             model_config['seed'] = config.get('seed', 42)
