@@ -48,8 +48,8 @@ class LoRAConv2d(nn.Module):
         # LoRA computation always in float32 to avoid AMP issues
         lora_out = self.lora_B(self.lora_A(x))
         lora_out = self.dropout(lora_out) * self.scaling
-        
-        if batch_idx == 0 and self.training:
+
+        if self.training:
             print(f"[DEBUG] x: {x.dtype}, base_out: {base_out.dtype}, lora_out(before cast): {lora_out.dtype}")
 
         lora_out = lora_out.to(base_out.dtype)
