@@ -18,7 +18,7 @@ data:
   data_split: iid
   input_size: 224
   imagenet_style: true
-  batch_size: 512
+  batch_size: 64  # Reduced for GPU memory constraints
   data_dir: ./data
   model_type: imagenet
   num_clients: 10

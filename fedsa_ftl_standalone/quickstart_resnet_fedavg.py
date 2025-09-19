@@ -90,7 +90,7 @@ class FedAvgClient:
         )
         
         # Setup AMP scaler
-        scaler = torch.cuda.amp.GradScaler()
+        scaler = torch.amp.GradScaler('cuda') if torch.cuda.is_available() else None
         
         num_epochs = training_config.get('epochs', 3)
         total_loss = 0
@@ -117,7 +117,7 @@ class FedAvgClient:
                 optimizer.zero_grad()
                 
                 # Use autocast for forward pass
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda', enabled=scaler is not None):
                     output = self.model(data)
                     
                     # Handle Mixup/CutMix targets
