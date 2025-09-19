@@ -23,7 +23,6 @@ class LoRAConv2d(nn.Module):
         in_c, out_c = base_conv.in_channels, base_conv.out_channels
         
         # LoRA matrices: A (down-projection) and B (up-projection)
-        # Explicitly create as float32 for AMP compatibility
         self.lora_A = nn.Conv2d(in_c, r, kernel_size=1, bias=False)
         self.lora_B = nn.Conv2d(r, out_c, kernel_size=1, bias=False)
         
@@ -42,11 +41,28 @@ class LoRAConv2d(nn.Module):
         # Base convolution output
         base_out = self.base(x)
         
+        # Debug: Check dtypes and devices
+        if self.training:
+            print(f"[DEBUG] x: dtype={x.dtype}, device={x.device}")
+            print(f"[DEBUG] lora_A.weight: dtype={self.lora_A.weight.dtype}, device={self.lora_A.weight.device}")
+            print(f"[DEBUG] lora_B.weight: dtype={self.lora_B.weight.dtype}, device={self.lora_B.weight.device}")
+        
         # LoRA computation - all layers are half precision, so no dtype conversion needed
         lora_out = self.lora_B(self.lora_A(x))
         lora_out = self.dropout(lora_out) * self.scaling
         
         return base_out + lora_out
+    
+    def to(self, *args, **kwargs):
+        """Ensure LoRA layers are moved to the same device and dtype as the base layer"""
+        result = super().to(*args, **kwargs)
+        # Make sure LoRA layers match the base layer's device and dtype
+        if hasattr(result, 'base') and hasattr(result, 'lora_A') and hasattr(result, 'lora_B'):
+            target_device = result.base.weight.device
+            target_dtype = result.base.weight.dtype
+            result.lora_A = result.lora_A.to(device=target_device, dtype=target_dtype)
+            result.lora_B = result.lora_B.to(device=target_device, dtype=target_dtype)
+        return result
     
     def get_lora_parameters(self):
         """Get LoRA-specific parameters for federated learning"""
