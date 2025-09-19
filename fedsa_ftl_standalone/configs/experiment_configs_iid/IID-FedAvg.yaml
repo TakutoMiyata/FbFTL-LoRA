@@ -18,7 +18,7 @@ data:
   data_split: iid
   input_size: 224
   imagenet_style: true
-  batch_size: 128  # Optimized for TITAN V (12GB VRAM)
+  batch_size: 256  # Further optimized for TITAN V (12GB VRAM)
   data_dir: ./data
   model_type: imagenet
   num_clients: 10
@@ -106,7 +106,7 @@ seed: 42
 
 training:
   epochs: 3
-  lr: 0.05  # Increased for larger batch size
+  lr: 0.1  # Scaled with larger batch size (256)
   weight_decay: 0.0005
   scheduler: cosine
   warmup_epochs: 2
