@@ -23,8 +23,9 @@ class LoRAConv2d(nn.Module):
         in_c, out_c = base_conv.in_channels, base_conv.out_channels
         
         # LoRA matrices: A (down-projection) and B (up-projection)
-        self.lora_A = nn.Conv2d(in_c, r, kernel_size=1, bias=False)
-        self.lora_B = nn.Conv2d(r, out_c, kernel_size=1, bias=False)
+        # Explicitly create as float32 for AMP compatibility
+        self.lora_A = nn.Conv2d(in_c, r, kernel_size=1, bias=False).float()
+        self.lora_B = nn.Conv2d(r, out_c, kernel_size=1, bias=False).float()
         
         self.scaling = alpha / float(r) if r > 0 else 0
         self.dropout = nn.Dropout2d(dropout) if dropout and dropout > 0 else nn.Identity()
@@ -38,10 +39,18 @@ class LoRAConv2d(nn.Module):
             p.requires_grad = False
 
     def forward(self, x):
-        # Base output + LoRA adaptation
+        # Save input dtype for AMP compatibility
+        input_dtype = x.dtype
+        
+        # Base convolution output (uses original dtype)
         base_out = self.base(x)
-        lora_out = self.dropout(self.lora_B(self.lora_A(x))) * self.scaling
-        return base_out + lora_out
+        
+        # LoRA computation always in float32 to avoid AMP issues
+        lora_out = self.lora_B(self.lora_A(x.float()))
+        lora_out = self.dropout(lora_out) * self.scaling
+        
+        # Convert LoRA output back to input dtype and add to base
+        return base_out + lora_out.to(input_dtype)
     
     def get_lora_parameters(self):
         """Get LoRA-specific parameters for federated learning"""
