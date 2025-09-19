@@ -46,11 +46,16 @@ class LoRAConv2d(nn.Module):
         base_out = self.base(x)
         
         # LoRA computation always in float32 to avoid AMP issues
-        lora_out = self.lora_B(self.lora_A(x.float()))  # Convert input to float32
+        lora_out = self.lora_B(self.lora_A(x))
         lora_out = self.dropout(lora_out) * self.scaling
         
+        if batch_idx == 0 and self.training:
+            print(f"[DEBUG] x: {x.dtype}, base_out: {base_out.dtype}, lora_out(before cast): {lora_out.dtype}")
+
+        lora_out = lora_out.to(base_out.dtype)
+        
         # Convert LoRA output back to input dtype and add to base
-        return base_out + lora_out.to(input_dtype)
+        return base_out + lora_out
     
     def get_lora_parameters(self):
         """Get LoRA-specific parameters for federated learning"""
