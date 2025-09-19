@@ -523,11 +523,14 @@ def main():
     temp_client = ResNetFedSAFTLClient(0, initial_model, device, config)
     model_stats = temp_client.get_model_size()
     
-    print("\nResNet Model Statistics:")
+    print("\nModel Statistics:")
     print(f"  Architecture: {config['model']['model_name']}")
     print(f"  Total parameters: {model_stats['total_params']:,}")
     print(f"  Trainable parameters: {model_stats['trainable_params']:,}")
-    print(f"  LoRA rank: {config['model']['lora_r']}")
+    # Handle both old and new config formats
+    lora_rank = config['model'].get('lora', {}).get('r', config['model'].get('lora_r', 0))
+    if lora_rank > 0:
+        print(f"  LoRA rank: {lora_rank}")
     print(f"  Communication overhead: {model_stats['communication_params']:,} parameters/round")
     print(f"  Compression ratio: {model_stats['compression_ratio']:.2f}x")
     

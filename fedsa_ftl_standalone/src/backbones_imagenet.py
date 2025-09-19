@@ -78,6 +78,62 @@ def inject_lora_to_pointwise_convs(model: nn.Module, r=4, alpha=8, dropout=0.0):
     return lora_count
 
 
+def add_lora_methods_to_model(model: nn.Module):
+    """
+    Add LoRA parameter methods to the model for FedSA-LoRA compatibility
+    
+    Args:
+        model: PyTorch model with LoRA adapters
+    """
+    def get_A_parameters(self):
+        """Get all LoRA A matrix parameters for FedSA-LoRA aggregation"""
+        A_params = {}
+        for name, module in self.named_modules():
+            if isinstance(module, LoRAConv2d):
+                A_params[f"{name}.lora_A.weight"] = module.lora_A.weight.data.clone()
+        return A_params
+    
+    def get_B_parameters(self):
+        """Get all LoRA B matrix parameters"""
+        B_params = {}
+        for name, module in self.named_modules():
+            if isinstance(module, LoRAConv2d):
+                B_params[f"{name}.lora_B.weight"] = module.lora_B.weight.data.clone()
+        return B_params
+    
+    def set_A_parameters(self, A_params):
+        """Set LoRA A matrix parameters from aggregated values"""
+        for name, module in self.named_modules():
+            if isinstance(module, LoRAConv2d):
+                param_name = f"{name}.lora_A.weight"
+                if param_name in A_params:
+                    module.lora_A.weight.data = A_params[param_name].clone()
+    
+    def get_A_parameter_groups(self):
+        """Get LoRA A matrix parameters as a list for optimizer"""
+        A_params = []
+        for name, module in self.named_modules():
+            if isinstance(module, LoRAConv2d):
+                A_params.append(module.lora_A.weight)
+        return A_params
+    
+    def get_B_parameter_groups(self):
+        """Get LoRA B matrix parameters as a list for optimizer"""
+        B_params = []
+        for name, module in self.named_modules():
+            if isinstance(module, LoRAConv2d):
+                B_params.append(module.lora_B.weight)
+        return B_params
+    
+    # Bind methods to model instance
+    import types
+    model.get_A_parameters = types.MethodType(get_A_parameters, model)
+    model.get_B_parameters = types.MethodType(get_B_parameters, model)
+    model.set_A_parameters = types.MethodType(set_A_parameters, model)
+    model.get_A_parameter_groups = types.MethodType(get_A_parameter_groups, model)
+    model.get_B_parameter_groups = types.MethodType(get_B_parameter_groups, model)
+
+
 def freeze_backbone_except_head_and_lora(model: nn.Module, verbose=True):
     """
     Freeze backbone parameters except classifier head and LoRA adapters
@@ -200,6 +256,8 @@ def make_model_with_lora(config: Dict[str, Any]):
     if use_lora:
         print(f"🔧 Injecting LoRA adapters...")
         inject_lora_to_pointwise_convs(model, r=lora_r, alpha=lora_alpha, dropout=lora_dropout)
+        # Add FedSA-LoRA methods for A matrix parameter handling
+        add_lora_methods_to_model(model)
     
     # Freeze backbone if requested
     if freeze_backbone:
