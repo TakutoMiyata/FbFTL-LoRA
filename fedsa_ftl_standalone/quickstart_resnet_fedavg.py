@@ -18,6 +18,7 @@ import random
 import json
 import time
 from datetime import datetime
+from tqdm import tqdm
 
 # Load environment variables from .env file
 def load_env_file(env_path='.env'):
@@ -100,7 +101,17 @@ class FedAvgClient:
         
         for epoch in range(num_epochs):
             epoch_loss = 0
-            for batch_idx, (data, target) in enumerate(dataloader):
+            batch_count = len(dataloader)
+            
+            # Add progress bar for batches
+            if self.client_id == 0:  # Only show for first client to avoid clutter
+                pbar = tqdm(enumerate(dataloader), total=batch_count, 
+                           desc=f"Client {self.client_id} Epoch {epoch+1}/{num_epochs}",
+                           leave=False)
+            else:
+                pbar = enumerate(dataloader)
+            
+            for batch_idx, (data, target) in pbar:
                 data, target = data.to(self.device), target.to(self.device)
                 
                 optimizer.zero_grad()
@@ -135,8 +146,20 @@ class FedAvgClient:
                 # Calculate accuracy (only for non-Mixup targets)
                 if len(target.shape) == 1:
                     pred = output.argmax(dim=1, keepdim=True)
-                    correct += pred.eq(target.view_as(pred)).sum().item()
+                    batch_correct = pred.eq(target.view_as(pred)).sum().item()
+                    correct += batch_correct
                     total += target.size(0)
+                    batch_acc = 100. * batch_correct / target.size(0)
+                else:
+                    batch_acc = 0.0
+                
+                # Update progress bar
+                if self.client_id == 0 and isinstance(pbar, tqdm):
+                    pbar.set_postfix({
+                        'loss': f'{loss.item():.4f}',
+                        'acc': f'{batch_acc:.1f}%',
+                        'avg_loss': f'{epoch_loss/(batch_idx+1):.4f}'
+                    })
             
             total_loss += epoch_loss
         
@@ -453,8 +476,25 @@ def main():
     best_round = 0
     start_time = time.time()
     
+    # Track timing
+    round_times = []
+    
     for round_idx in range(config['federated']['num_rounds']):
-        print(f"\n[Round {round_idx + 1}/{config['federated']['num_rounds']}]")
+        round_start_time = time.time()
+        
+        print(f"\n{'='*80}")
+        print(f"[Round {round_idx + 1}/{config['federated']['num_rounds']}] Started at {datetime.now().strftime('%H:%M:%S')}")
+        
+        # Estimate remaining time
+        if round_idx > 0:
+            avg_round_time = sum(round_times) / len(round_times)
+            remaining_rounds = config['federated']['num_rounds'] - round_idx
+            est_remaining = avg_round_time * remaining_rounds
+            hours = int(est_remaining // 3600)
+            minutes = int((est_remaining % 3600) // 60)
+            seconds = int(est_remaining % 60)
+            print(f"Estimated remaining time: {hours}h {minutes}m {seconds}s")
+        print(f"{'='*80}")
         
         # Select clients based on client_fraction
         client_fraction = config['federated'].get('client_fraction', 1.0)
@@ -470,8 +510,11 @@ def main():
         
         # Client updates
         client_updates = []
+        train_start_time = time.time()
         
-        for client_id in selected_clients:
+        print(f"\nTraining {len(selected_clients)} clients...")
+        for idx, client_id in enumerate(selected_clients):
+            print(f"\n  📊 Training Client {client_id} ({idx+1}/{len(selected_clients)})")
             # Get client training data
             client_dataloader = get_client_dataloader(
                 trainset,
@@ -490,16 +533,30 @@ def main():
                 print(f"WARNING: No global model state available for client {client_id}")
             
             # Local training
+            client_start = time.time()
             client_result = clients[client_id].train(client_dataloader, config['training'])
+            client_time = time.time() - client_start
+            print(f"    ✅ Completed in {client_time:.1f}s - Loss: {client_result['loss']:.4f}, Acc: {client_result['accuracy']:.2f}%")
             client_updates.append(client_result)
         
         # Server aggregation
+        print(f"\n🔄 Aggregating parameters from {len(client_updates)} clients...")
+        agg_start = time.time()
         round_stats = server.aggregate(client_updates)
+        agg_time = time.time() - agg_start
+        print(f"  ✅ Aggregation completed in {agg_time:.1f}s")
+        
+        # Calculate round time
+        round_time = time.time() - round_start_time
+        round_times.append(round_time)
         
         # Print summary
-        print(f"\nRound {round_idx + 1} Summary:")
+        print(f"\n📊 Round {round_idx + 1} Summary:")
         print(f"  Avg Training Accuracy: {round_stats['avg_train_accuracy']:.2f}%")
         print(f"  Communication Cost: {round_stats['communication_cost_mb']:.2f} MB")
+        print(f"  Round Time: {round_time:.1f}s")
+        print(f"  Training Time: {time.time() - train_start_time:.1f}s")
+        print(f"  Aggregation Time: {agg_time:.1f}s")
         
         # Evaluation
         is_eval_round = (round_idx + 1) % config['evaluation'].get('eval_freq', 5) == 0
@@ -527,7 +584,12 @@ def main():
             if avg_test_acc > best_accuracy:
                 best_accuracy = avg_test_acc
                 best_round = round_idx + 1
-                print(f"  ** New best accuracy! **")
+                print(f"  🎉 ** New best accuracy! **")
+            
+            # Progress towards convergence
+            if round_idx > 0 and len(server.history['test_accuracy']) > 1:
+                improvement = avg_test_acc - server.history['test_accuracy'][-2]
+                print(f"  📈 Improvement: {improvement:+.2f}% from last evaluation")
             
             server.history['test_accuracy'].append(avg_test_acc)
         else:
