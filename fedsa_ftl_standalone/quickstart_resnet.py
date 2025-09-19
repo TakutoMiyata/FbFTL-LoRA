@@ -519,6 +519,7 @@ def main():
         # Use ImageNet-style backbone with LoRA
         print(f"Creating ImageNet-style {config['model']['model_name']} model...")
         initial_model = make_model_with_lora(config)
+        initial_model = initial_model.half()  # Convert to half precision for AMP compatibility
         initial_model = initial_model.to(device)  # Move to GPU
         print_model_summary(config, initial_model)
     else:
@@ -603,6 +604,7 @@ def main():
         # Create client model (same architecture as initial model)
         if use_imagenet_style:
             client_model = make_model_with_lora(config)
+            client_model = client_model.half()  # Convert to half precision for AMP compatibility
             client_model = client_model.to(device)  # Move to GPU
         else:
             model_config = config['model'].copy()

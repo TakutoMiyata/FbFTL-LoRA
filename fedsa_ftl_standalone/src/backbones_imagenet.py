@@ -39,22 +39,12 @@ class LoRAConv2d(nn.Module):
             p.requires_grad = False
 
     def forward(self, x):
-        # Save input dtype for AMP compatibility
-        input_dtype = x.dtype
-        
-        # Base convolution output (uses original dtype)
+        # Base convolution output
         base_out = self.base(x)
         
-        # LoRA computation - handle dtype properly
-        if input_dtype == torch.float16:
-            # AMP is active: convert to float32 for LoRA, then back to float16
-            lora_out = self.lora_B(self.lora_A(x.float()))
-            lora_out = self.dropout(lora_out) * self.scaling
-            lora_out = lora_out.to(input_dtype)
-        else:
-            # AMP is not active: use original dtype (should be float32)
-            lora_out = self.lora_B(self.lora_A(x))
-            lora_out = self.dropout(lora_out) * self.scaling
+        # LoRA computation - all layers are half precision, so no dtype conversion needed
+        lora_out = self.lora_B(self.lora_A(x))
+        lora_out = self.dropout(lora_out) * self.scaling
         
         return base_out + lora_out
     
