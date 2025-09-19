@@ -46,7 +46,7 @@ class LoRAConv2d(nn.Module):
         base_out = self.base(x)
         
         # LoRA computation always in float32 to avoid AMP issues
-        lora_out = self.lora_B(self.lora_A(x.float()))
+        lora_out = self.lora_B(self.lora_A(x))
         lora_out = self.dropout(lora_out) * self.scaling
         
         # Convert LoRA output back to input dtype and add to base
