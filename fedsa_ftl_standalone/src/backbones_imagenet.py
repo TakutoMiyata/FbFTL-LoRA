@@ -41,11 +41,11 @@ class LoRAConv2d(nn.Module):
         # Base convolution output
         base_out = self.base(x)
         
-        # Debug: Check dtypes and devices
-        if self.training:
-            print(f"[DEBUG] x: dtype={x.dtype}, device={x.device}")
-            print(f"[DEBUG] lora_A.weight: dtype={self.lora_A.weight.dtype}, device={self.lora_A.weight.device}")
-            print(f"[DEBUG] lora_B.weight: dtype={self.lora_B.weight.dtype}, device={self.lora_B.weight.device}")
+        # Optional debug: Uncomment to check dtypes and devices
+        # if self.training:
+        #     print(f"[DEBUG] x: dtype={x.dtype}, device={x.device}")
+        #     print(f"[DEBUG] lora_A.weight: dtype={self.lora_A.weight.dtype}, device={self.lora_A.weight.device}")
+        #     print(f"[DEBUG] lora_B.weight: dtype={self.lora_B.weight.dtype}, device={self.lora_B.weight.device}")
         
         # LoRA computation - all layers are half precision, so no dtype conversion needed
         lora_out = self.lora_B(self.lora_A(x))
@@ -128,7 +128,10 @@ def add_lora_methods_to_model(model: nn.Module):
             if isinstance(module, LoRAConv2d):
                 param_name = f"{name}.lora_A.weight"
                 if param_name in A_params:
-                    module.lora_A.weight.data = A_params[param_name].clone()
+                    # Ensure the parameter is on the same device and dtype as the current weight
+                    device = module.lora_A.weight.device
+                    dtype = module.lora_A.weight.dtype
+                    module.lora_A.weight.data = A_params[param_name].clone().to(device=device, dtype=dtype)
     
     def get_A_parameter_groups(self):
         """Get LoRA A matrix parameters as a list for optimizer"""
