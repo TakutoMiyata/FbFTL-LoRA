@@ -178,7 +178,8 @@ def make_model_with_lora(config: Dict[str, Any]):
         PyTorch model with optional LoRA adapters
     """
     # Extract model configuration
-    model_config = config.get('model', {})\n    model_name = model_config.get('model_name', 'mobilenet_v2')
+    model_config = config.get('model', {})
+    model_name = model_config.get('model_name', 'mobilenet_v2')
     num_classes = model_config.get('num_classes', 100)
     pretrained = model_config.get('pretrained', True)
     freeze_backbone = model_config.get('freeze_backbone', True)
