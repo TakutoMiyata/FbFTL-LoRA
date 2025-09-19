@@ -76,8 +76,11 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             else:
                 # Regular optimizer for FedSA without DP
                 training_config = config.get('training', {})
+                # Only optimize parameters that require gradients (LoRA and classifier)
+                trainable_params = [p for p in model.parameters() if p.requires_grad]
+                print(f"Client {client_id}: Optimizer will track {len(trainable_params)} trainable parameters")
                 self.optimizer = torch.optim.SGD(
-                    model.parameters(),
+                    trainable_params,  # Only trainable parameters
                     lr=training_config.get('lr', 0.001),
                     momentum=training_config.get('momentum', 0.9),
                     weight_decay=training_config.get('weight_decay', 0.0001)
@@ -86,8 +89,11 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         else:
             # Standard federated learning optimizer
             training_config = config.get('training', {})
+            # Only optimize parameters that require gradients
+            trainable_params = [p for p in model.parameters() if p.requires_grad]
+            print(f"Client {client_id}: Optimizer will track {len(trainable_params)} trainable parameters")
             self.optimizer = torch.optim.SGD(
-                model.parameters(),
+                trainable_params,  # Only trainable parameters
                 lr=training_config.get('lr', 0.001),
                 momentum=training_config.get('momentum', 0.9),
                 weight_decay=training_config.get('weight_decay', 0.0001)
