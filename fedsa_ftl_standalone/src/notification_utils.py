@@ -140,13 +140,16 @@ class SlackNotifier:
         duration_str = f"{hours}h {minutes}m {seconds}s"
         
         # Extract key metrics
-        final_accuracy = summary.get('final_avg_accuracy', 0)
+        final_accuracy = summary.get('final_avg_accuracy')  # None if not available
         final_std = summary.get('final_std_accuracy', 0)
         best_accuracy = summary.get('best_test_accuracy', 0)
         total_comm_mb = summary.get('total_communication_mb', 0)
         
         # Determine status emoji based on accuracy
-        if final_accuracy >= 80:
+        if final_accuracy is None:
+            status_emoji = "❓"
+            status_text = "Unknown"
+        elif final_accuracy >= 80:
             status_emoji = "🎉"
             status_text = "Excellent"
         elif final_accuracy >= 70:
@@ -203,7 +206,7 @@ class SlackNotifier:
                 "fields": [
                     {
                         "type": "mrkdwn",
-                        "text": f"*Final Accuracy:*\n{final_accuracy:.2f}% ± {final_std:.2f}%"
+                        "text": f"*Final Accuracy:*\n{final_accuracy:.2f}% ± {final_std:.2f}%" if final_accuracy is not None else "*Final Accuracy:*\nN/A"
                     },
                     {
                         "type": "mrkdwn",
@@ -245,7 +248,7 @@ class SlackNotifier:
         })
         
         return self.send_message(
-            f"Training complete: {experiment_name} - Accuracy: {final_accuracy:.2f}% ({status_text})",
+            f"Training complete: {experiment_name} - Accuracy: {final_accuracy:.2f}% ({status_text})" if final_accuracy is not None else f"Training complete: {experiment_name} - Accuracy: N/A ({status_text})",
             blocks=blocks
         )
     

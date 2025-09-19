@@ -163,7 +163,8 @@ def main():
         testset,
         batch_size=config['data']['batch_size'],
         shuffle=False,
-        num_workers=config['data'].get('num_workers', 0)
+        num_workers=config['data'].get('num_workers', 0),
+        pin_memory=True
     )
     
     # Initialize server
@@ -329,9 +330,9 @@ def main():
             client_test_results = personalized_results
             test_accuracies = personalized_accuracies
         else:
-            test_accuracies = [0] * len(selected_clients)  # Placeholder
-            personalized_accuracies = [0] * len(selected_clients)
-            avg_personalized_acc = 0
+            test_accuracies = None  # No evaluation this round
+            personalized_accuracies = None
+            avg_personalized_acc = None
             # Create proper test results with both accuracy and loss keys
             client_test_results = [{'accuracy': 0, 'loss': 0} for _ in selected_clients]
         
@@ -346,7 +347,7 @@ def main():
         
         # Track best accuracy only during evaluation rounds
         is_new_best = False
-        if is_eval_round and test_accuracies:
+        if is_eval_round and test_accuracies is not None:
             print(f"  Avg Personalized Test Accuracy: {avg_personalized_acc:.2f}%")
             # Track best PERSONALIZED accuracy as the main metric
             if avg_personalized_acc > best_accuracy:
@@ -363,9 +364,9 @@ def main():
             'timestamp': datetime.now().isoformat(),
             'selected_clients': selected_clients,
             'avg_train_accuracy': avg_train_acc,
-            'avg_personalized_accuracy': avg_personalized_acc if any(test_accuracies) else 0,
+            'avg_personalized_accuracy': avg_personalized_acc if avg_personalized_acc is not None else None,
             'individual_train_accuracies': train_accuracies,
-            'individual_test_accuracies': test_accuracies if any(test_accuracies) else [],
+            'individual_test_accuracies': test_accuracies if test_accuracies is not None else None,
             'communication_cost_mb': round_stats.get('communication_cost_mb', 0),
             'is_best_round': is_new_best
         }

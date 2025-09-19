@@ -75,7 +75,7 @@ class FedAvgClient:
         self.local_data_size = 0
     
     def train(self, dataloader, training_config):
-        """Train the model locally"""
+        """Train the model locally with AMP support"""
         self.model.train()
         
         # Setup optimizer
@@ -85,6 +85,9 @@ class FedAvgClient:
             momentum=training_config.get('momentum', 0.9),
             weight_decay=training_config.get('weight_decay', 0.0005)
         )
+        
+        # Setup AMP scaler
+        scaler = torch.cuda.amp.GradScaler()
         
         num_epochs = training_config.get('epochs', 3)
         total_loss = 0
@@ -99,24 +102,31 @@ class FedAvgClient:
                 data, target = data.to(self.device), target.to(self.device)
                 
                 optimizer.zero_grad()
-                output = self.model(data)
                 
-                # Handle Mixup/CutMix targets
-                if len(target.shape) > 1:  # Mixup/CutMix
-                    loss = -(target * F.log_softmax(output, dim=1)).sum(dim=1).mean()
-                else:
-                    loss = F.cross_entropy(output, target)
+                # Use autocast for forward pass
+                with torch.cuda.amp.autocast():
+                    output = self.model(data)
+                    
+                    # Handle Mixup/CutMix targets
+                    if len(target.shape) > 1:  # Mixup/CutMix
+                        loss = -(target * F.log_softmax(output, dim=1)).sum(dim=1).mean()
+                    else:
+                        loss = F.cross_entropy(output, target)
                 
-                loss.backward()
+                # Scale loss and backward pass
+                scaler.scale(loss).backward()
                 
-                # Gradient clipping if specified
+                # Gradient clipping if specified (with scaled gradients)
                 if training_config.get('gradient_clip'):
+                    scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(
                         self.model.parameters(), 
                         training_config['gradient_clip']
                     )
                 
-                optimizer.step()
+                # Update weights with scaler
+                scaler.step(optimizer)
+                scaler.update()
                 
                 epoch_loss += loss.item()
                 
@@ -157,10 +167,13 @@ class FedAvgClient:
         with torch.no_grad():
             for data, target in dataloader:
                 data, target = data.to(self.device), target.to(self.device)
-                output = self.model(data)
-                test_loss += F.cross_entropy(output, target, reduction='sum').item()
-                pred = output.argmax(dim=1, keepdim=True)
-                correct += pred.eq(target.view_as(pred)).sum().item()
+                
+                # Use autocast for forward pass in evaluation
+                with torch.cuda.amp.autocast():
+                    output = self.model(data)
+                    test_loss += F.cross_entropy(output, target, reduction='sum').item()
+                    pred = output.argmax(dim=1, keepdim=True)
+                    correct += pred.eq(target.view_as(pred)).sum().item()
                 total += target.size(0)
         
         test_loss /= total
@@ -489,7 +502,8 @@ def main():
             
             server.history['test_accuracy'].append(avg_test_acc)
         else:
-            test_accuracies = [0] * len(selected_clients)
+            test_accuracies = None  # No evaluation this round
+            avg_test_acc = None  # No evaluation this round
         
         # Save round results
         round_result = {
@@ -497,10 +511,10 @@ def main():
             'timestamp': datetime.now().isoformat(),
             'selected_clients': selected_clients,
             'avg_train_accuracy': round_stats['avg_train_accuracy'],
-            'avg_test_accuracy': avg_test_acc,
-            'individual_test_accuracies': test_accuracies,
+            'avg_test_accuracy': avg_test_acc if avg_test_acc is not None else None,
+            'individual_test_accuracies': test_accuracies if test_accuracies is not None else None,
             'communication_cost_mb': round_stats['communication_cost_mb'],
-            'is_best_round': avg_test_acc == best_accuracy
+            'is_best_round': avg_test_acc is not None and avg_test_acc == best_accuracy
         }
         results['rounds'].append(round_result)
         

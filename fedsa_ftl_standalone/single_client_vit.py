@@ -125,7 +125,8 @@ def create_dataloader(dataset, batch_size, shuffle=True, collate_fn=None, num_wo
         batch_size=batch_size, 
         shuffle=shuffle,
         collate_fn=collate_fn,
-        num_workers=num_workers
+        num_workers=num_workers,
+        pin_memory=True
     )
 
 

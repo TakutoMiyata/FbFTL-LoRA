@@ -94,7 +94,7 @@ def test_model_components():
     
     # Load real data
     trainset, testset = load_cifar10_data('./data')
-    test_loader = DataLoader(testset, batch_size=32, shuffle=False)
+    test_loader = DataLoader(testset, batch_size=32, shuffle=False, pin_memory=True)
     
     # Evaluate before training
     model.eval()
@@ -119,7 +119,7 @@ def test_model_components():
     optimizer = torch.optim.Adam([p for p in model.parameters() if p.requires_grad], lr=1e-3)
     
     model.train()
-    train_loader = DataLoader(trainset, batch_size=32, shuffle=True)
+    train_loader = DataLoader(trainset, batch_size=32, shuffle=True, pin_memory=True)
     
     for i, (images, labels) in enumerate(train_loader):
         if i >= 50:  # Train for 50 batches

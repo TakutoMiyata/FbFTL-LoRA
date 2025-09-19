@@ -69,10 +69,13 @@ class FedSAFTLClient:
     
     def _train_standard(self, dataloader: DataLoader, config: Dict, num_epochs: int, 
                        lr: float, weight_decay: float) -> Dict:
-        """Standard training without differential privacy"""
+        """Standard training without differential privacy with AMP support"""
         # Initialize optimizer (only optimize LoRA parameters)
         optimizer = self._get_optimizer(config, lr, weight_decay)
         criterion = nn.CrossEntropyLoss()
+        
+        # Setup AMP scaler
+        scaler = torch.cuda.amp.GradScaler()
         
         # Training metrics
         train_loss = 0
@@ -90,38 +93,43 @@ class FedSAFTLClient:
                 for batch_idx, (images, labels) in enumerate(pbar):
                     images, labels = images.to(self.device), labels.to(self.device)
                     
-                    # Check if labels are one-hot (from Mixup/CutMix)
-                    if labels.dim() == 2 and labels.size(1) > 1:
-                        # Mixup/CutMix: labels are soft (one-hot or mixed)
-                        # Use KL divergence loss for soft labels
-                        outputs = self.model(images)
-                        log_probs = torch.nn.functional.log_softmax(outputs, dim=1)
-                        # KL divergence loss (equivalent to cross entropy for soft labels)
-                        loss = -(labels * log_probs).sum(dim=1).mean()
-                        
-                        # For accuracy, use the argmax of soft labels
-                        _, predicted = outputs.max(1)
-                        _, label_indices = labels.max(1)
-                        epoch_correct += predicted.eq(label_indices).sum().item()
-                    else:
-                        # Standard labels (integer format)
-                        outputs = self.model(images)
-                        loss = criterion(outputs, labels)
-                        
-                        _, predicted = outputs.max(1)
-                        epoch_correct += predicted.eq(labels).sum().item()
-                    
-                    # Backward pass
                     optimizer.zero_grad()
-                    loss.backward()
                     
-                    # Gradient clipping for stability
+                    # Use autocast for forward pass
+                    with torch.cuda.amp.autocast():
+                        # Check if labels are one-hot (from Mixup/CutMix)
+                        if labels.dim() == 2 and labels.size(1) > 1:
+                            # Mixup/CutMix: labels are soft (one-hot or mixed)
+                            outputs = self.model(images)
+                            log_probs = torch.nn.functional.log_softmax(outputs, dim=1)
+                            # KL divergence loss (equivalent to cross entropy for soft labels)
+                            loss = -(labels * log_probs).sum(dim=1).mean()
+                            
+                            # For accuracy, use the argmax of soft labels
+                            _, predicted = outputs.max(1)
+                            _, label_indices = labels.max(1)
+                            epoch_correct += predicted.eq(label_indices).sum().item()
+                        else:
+                            # Standard labels (integer format)
+                            outputs = self.model(images)
+                            loss = criterion(outputs, labels)
+                            
+                            _, predicted = outputs.max(1)
+                            epoch_correct += predicted.eq(labels).sum().item()
+                    
+                    # Backward pass with scaler
+                    scaler.scale(loss).backward()
+                    
+                    # Gradient clipping for stability (with scaled gradients)
+                    scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(
                         [p for p in self.model.parameters() if p.requires_grad], 
                         max_norm=1.0
                     )
                     
-                    optimizer.step()
+                    # Update weights with scaler
+                    scaler.step(optimizer)
+                    scaler.update()
                     
                     # Update metrics
                     epoch_loss += loss.item()
@@ -270,24 +278,26 @@ class FedSAFTLClient:
             for images, labels in dataloader:
                 images, labels = images.to(self.device), labels.to(self.device)
                 
-                # Check if labels are one-hot (from Mixup/CutMix) - should not happen in evaluation
-                # but handle it just in case
-                if labels.dim() == 2 and labels.size(1) > 1:
-                    # Soft labels (shouldn't happen in evaluation, but handle gracefully)
-                    outputs = self.model(images)
-                    log_probs = torch.nn.functional.log_softmax(outputs, dim=1)
-                    loss = -(labels * log_probs).sum(dim=1).mean()
-                    
-                    _, predicted = outputs.max(1)
-                    _, label_indices = labels.max(1)
-                    test_correct += predicted.eq(label_indices).sum().item()
-                    test_loss += loss.item() * labels.size(0)
-                else:
-                    # Standard labels (normal case for evaluation)
-                    outputs = self.model(images)
-                    loss = criterion(outputs, labels)
-                    
-                    test_loss += loss.item() * labels.size(0)
+                # Use autocast for forward pass in evaluation
+                with torch.cuda.amp.autocast():
+                    # Check if labels are one-hot (from Mixup/CutMix) - should not happen in evaluation
+                    # but handle it just in case
+                    if labels.dim() == 2 and labels.size(1) > 1:
+                        # Soft labels (shouldn't happen in evaluation, but handle gracefully)
+                        outputs = self.model(images)
+                        log_probs = torch.nn.functional.log_softmax(outputs, dim=1)
+                        loss = -(labels * log_probs).sum(dim=1).mean()
+                        
+                        _, predicted = outputs.max(1)
+                        _, label_indices = labels.max(1)
+                        test_correct += predicted.eq(label_indices).sum().item()
+                        test_loss += loss.item() * labels.size(0)
+                    else:
+                        # Standard labels (normal case for evaluation)
+                        outputs = self.model(images)
+                        loss = criterion(outputs, labels)
+                        
+                        test_loss += loss.item() * labels.size(0)
                     _, predicted = outputs.max(1)
                     test_correct += predicted.eq(labels).sum().item()
                 

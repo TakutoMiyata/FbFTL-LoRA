@@ -338,7 +338,8 @@ def get_client_dataloader(dataset, client_indices: List[int], batch_size: int,
         batch_size=batch_size, 
         shuffle=shuffle,
         collate_fn=collate_fn,
-        num_workers=num_workers
+        num_workers=num_workers,
+        pin_memory=True
     )
 
 

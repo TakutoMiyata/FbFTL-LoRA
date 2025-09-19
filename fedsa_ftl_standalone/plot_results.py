@@ -71,11 +71,11 @@ def plot_accuracy_curves(results, save_dir):
         for r in rounds_data:
             # Try different possible field names for test accuracy
             test_acc = None
-            if 'avg_test_accuracy' in r and r['avg_test_accuracy'] > 0:
+            if 'avg_test_accuracy' in r and r['avg_test_accuracy'] is not None and r['avg_test_accuracy'] > 0:
                 test_acc = r['avg_test_accuracy']
-            elif 'avg_personalized_accuracy' in r and r['avg_personalized_accuracy'] > 0:
+            elif 'avg_personalized_accuracy' in r and r['avg_personalized_accuracy'] is not None and r['avg_personalized_accuracy'] > 0:
                 test_acc = r['avg_personalized_accuracy']
-            elif 'test_accuracy' in r and r['test_accuracy'] > 0:
+            elif 'test_accuracy' in r and r['test_accuracy'] is not None and r['test_accuracy'] > 0:
                 test_acc = r['test_accuracy']
             
             if test_acc is not None:
@@ -89,8 +89,8 @@ def plot_accuracy_curves(results, save_dir):
         epochs_data = results['epochs']
         rounds = [e['epoch'] for e in epochs_data]
         train_accs = [e['train_accuracy'] for e in epochs_data]
-        test_accs = [e['test_accuracy'] for e in epochs_data if e['test_accuracy'] > 0]
-        test_rounds = [e['epoch'] for e in epochs_data if e['test_accuracy'] > 0]
+        test_accs = [e['test_accuracy'] for e in epochs_data if e['test_accuracy'] is not None and e['test_accuracy'] > 0]
+        test_rounds = [e['epoch'] for e in epochs_data if e['test_accuracy'] is not None and e['test_accuracy'] > 0]
         x_label = 'Epoch'
         title_prefix = 'Single Client Learning'
     else:
@@ -268,11 +268,11 @@ def plot_summary_dashboard(results, save_dir):
         for r in rounds_data:
             # Try different possible field names for test accuracy
             test_acc = None
-            if 'avg_test_accuracy' in r and r['avg_test_accuracy'] > 0:
+            if 'avg_test_accuracy' in r and r['avg_test_accuracy'] is not None and r['avg_test_accuracy'] > 0:
                 test_acc = r['avg_test_accuracy']
-            elif 'avg_personalized_accuracy' in r and r['avg_personalized_accuracy'] > 0:
+            elif 'avg_personalized_accuracy' in r and r['avg_personalized_accuracy'] is not None and r['avg_personalized_accuracy'] > 0:
                 test_acc = r['avg_personalized_accuracy']
-            elif 'test_accuracy' in r and r['test_accuracy'] > 0:
+            elif 'test_accuracy' in r and r['test_accuracy'] is not None and r['test_accuracy'] > 0:
                 test_acc = r['test_accuracy']
             
             if test_acc is not None:
@@ -287,8 +287,8 @@ def plot_summary_dashboard(results, save_dir):
         epochs_data = results['epochs']
         rounds = [e['epoch'] for e in epochs_data]
         train_accs = [e['train_accuracy'] for e in epochs_data]
-        test_accs = [e['test_accuracy'] for e in epochs_data if e['test_accuracy'] > 0]
-        test_rounds = [e['epoch'] for e in epochs_data if e['test_accuracy'] > 0]
+        test_accs = [e['test_accuracy'] for e in epochs_data if e['test_accuracy'] is not None and e['test_accuracy'] > 0]
+        test_rounds = [e['epoch'] for e in epochs_data if e['test_accuracy'] is not None and e['test_accuracy'] > 0]
         comm_costs = []  # No communication costs for single client
         x_label = 'Epoch'
         title_suffix = 'Single Client Learning'

@@ -133,7 +133,7 @@ custom_transform = transforms.Compose([
 # Changed to CIFAR100
 train_dataset = datasets.CIFAR100(root='data', train=True, transform=custom_transform, download=True)
 test_dataset = datasets.CIFAR100(root='data', train=False, transform=custom_transform)
-test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, num_workers=8, shuffle=False)
+test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, num_workers=8, shuffle=False, pin_memory=True)
 
 # MODIFIED PART: Add non-IID data distribution
 if args.data_split == 'non_iid':
@@ -174,12 +174,12 @@ if args.data_split == 'non_iid':
     # Create subsets with aggregated indices
     train_subset = torch.utils.data.Subset(train_dataset, all_train_indices)
     train_loader = DataLoader(dataset=train_subset, batch_size=batch_size, 
-                             num_workers=8, shuffle=True)
+                             num_workers=8, shuffle=True, pin_memory=True)
     train_set_len = len(all_train_indices)
     
     test_subset = torch.utils.data.Subset(test_dataset, all_test_indices)
     test_loader = DataLoader(dataset=test_subset, batch_size=batch_size, 
-                            num_workers=8, shuffle=False)
+                            num_workers=8, shuffle=False, pin_memory=True)
     
     print(f"Total training samples after non-IID simulation: {train_set_len}")
     print(f"Total test samples after non-IID simulation: {len(all_test_indices)}")
@@ -188,13 +188,13 @@ else:
     # Original IID case
     if train_set_denominator == 'full':
         train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, 
-                                 num_workers=8, shuffle=True)
+                                 num_workers=8, shuffle=True, pin_memory=True)
         train_set_len = len(train_dataset)
     else:
         selected_list = list(range(0, len(train_dataset), train_set_denominator))
         trainset_1 = torch.utils.data.Subset(train_dataset, selected_list)
         train_loader = torch.utils.data.DataLoader(dataset=trainset_1, batch_size=batch_size, 
-                                                  num_workers=8, shuffle=True)
+                                                  num_workers=8, shuffle=True, pin_memory=True)
         train_set_len = len(selected_list)
     
     # Keep original test loader for IID case
@@ -393,7 +393,8 @@ def compute_client_accuracies(model, test_dataset, client_test_indices, batch_si
             client_test_subset, 
             batch_size=batch_size, 
             shuffle=False, 
-            num_workers=4
+            num_workers=4,
+            pin_memory=True
         )
         
         # Compute accuracy for this client

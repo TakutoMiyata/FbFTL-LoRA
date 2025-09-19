@@ -112,6 +112,9 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         num_epochs = training_config.get('epochs', 5)
         microbatch_size = training_config.get('microbatch_size', 8)  # For DP
         
+        # Setup AMP scaler for non-DP training
+        scaler = torch.cuda.amp.GradScaler() if self.aggregation_method not in ['fedsa_shareA_dp', 'fedsa'] or self.dp_optimizer is None else None
+        
         for epoch in range(num_epochs):
             epoch_loss = 0.0
             
@@ -126,7 +129,9 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     target_for_loss = target
                     target_for_acc = target
                 
-                output = self.model(data)
+                # Use autocast for forward pass (both DP and non-DP cases)
+                with torch.cuda.amp.autocast():
+                    output = self.model(data)
                 
                 # Calculate loss with proper reduction for DP
                 if self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
@@ -154,15 +159,23 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     self.dp_optimizer.B_optimizer.step()
                     
                 else:
-                    # Standard training (non-DP)
+                    # Standard training (non-DP) with AMP
                     if len(target.shape) > 1:  # Mixup/CutMix loss
                         loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
                     else:
                         loss = F.cross_entropy(output, target_for_loss)
                     
                     self.optimizer.zero_grad()
-                    loss.backward()
-                    self.optimizer.step()
+                    
+                    if scaler is not None:
+                        # Use AMP scaler
+                        scaler.scale(loss).backward()
+                        scaler.step(self.optimizer)
+                        scaler.update()
+                    else:
+                        # Fallback to standard training
+                        loss.backward()
+                        self.optimizer.step()
                 
                 # Track metrics
                 epoch_loss += loss.item()
@@ -469,7 +482,8 @@ def main():
         testset,
         batch_size=config['data']['batch_size'],
         shuffle=False,
-        num_workers=config['data'].get('num_workers', 0)
+        num_workers=config['data'].get('num_workers', 0),
+        pin_memory=True
     )
     
     # Create initial global model for A matrix synchronization
@@ -651,9 +665,9 @@ def main():
             client_test_results = personalized_results
             test_accuracies = personalized_accuracies
         else:
-            test_accuracies = [0] * len(selected_clients)  # Placeholder
-            personalized_accuracies = [0] * len(selected_clients)
-            avg_personalized_acc = 0
+            test_accuracies = None  # No evaluation this round
+            personalized_accuracies = None
+            avg_personalized_acc = None
             # Create proper test results with both accuracy and loss keys
             client_test_results = [{'accuracy': 0, 'loss': 0} for _ in selected_clients]
         
@@ -729,7 +743,7 @@ def main():
         
         # Track best accuracy only during evaluation rounds
         is_new_best = False
-        if is_eval_round and test_accuracies:
+        if is_eval_round and test_accuracies is not None:
             print(f"  Avg Personalized Test Accuracy: {avg_personalized_acc:.2f}%")
             # Track best PERSONALIZED accuracy as the main metric
             if avg_personalized_acc > best_accuracy:
@@ -746,9 +760,9 @@ def main():
             'timestamp': datetime.now().isoformat(),
             'selected_clients': selected_clients,
             'avg_train_accuracy': avg_train_acc,
-            'avg_personalized_accuracy': avg_personalized_acc if any(test_accuracies) else 0,
+            'avg_personalized_accuracy': avg_personalized_acc if avg_personalized_acc is not None else None,
             'individual_train_accuracies': train_accuracies,
-            'individual_test_accuracies': test_accuracies if any(test_accuracies) else [],
+            'individual_test_accuracies': test_accuracies if test_accuracies is not None else None,
             'communication_cost_mb': round_stats.get('communication_cost_mb', 0),
             'is_best_round': is_new_best
         }
@@ -777,7 +791,7 @@ def main():
             # Prepare round stats for notification
             round_stats_for_notification = {
                 'train_accuracy': avg_train_acc,
-                'test_accuracy': avg_personalized_acc,
+                'test_accuracy': avg_personalized_acc if avg_personalized_acc is not None else None,
                 'per_round_communication_mb': round_stats.get('communication_cost_mb', 0)
             }
             
@@ -831,7 +845,7 @@ def main():
         'total_rounds': config['federated']['num_rounds'],
         'total_communication_mb': total_comm_mb,
         'avg_per_round_communication_mb': avg_per_round_comm_mb,
-        'final_avg_accuracy': avg_personalized_acc if 'avg_personalized_acc' in locals() else 0,
+        'final_avg_accuracy': avg_personalized_acc if 'avg_personalized_acc' in locals() and avg_personalized_acc is not None else None,
         'training_duration_hours': training_duration / 3600,
         'model_name': config['model']['model_name'],
         'dataset': config['data']['dataset_name']
