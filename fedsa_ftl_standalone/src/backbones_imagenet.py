@@ -131,7 +131,9 @@ def add_lora_methods_to_model(model: nn.Module):
                     # Ensure the parameter is on the same device and dtype as the current weight
                     device = module.lora_A.weight.device
                     dtype = module.lora_A.weight.dtype
-                    module.lora_A.weight.data = A_params[param_name].clone().to(device=device, dtype=dtype)
+                    # Use copy_ to update in-place instead of creating new tensor
+                    # This preserves the parameter identity for optimizer
+                    module.lora_A.weight.data.copy_(A_params[param_name].to(device=device, dtype=dtype))
     
     def get_A_parameter_groups(self):
         """Get LoRA A matrix parameters as a list for optimizer"""
