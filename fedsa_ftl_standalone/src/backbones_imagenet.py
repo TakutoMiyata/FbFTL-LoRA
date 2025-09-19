@@ -45,14 +45,17 @@ class LoRAConv2d(nn.Module):
         # Base convolution output (uses original dtype)
         base_out = self.base(x)
         
-        # LoRA computation always in float32 to avoid AMP issues
-        lora_out = self.lora_B(self.lora_A(x))
-        lora_out = self.dropout(lora_out) * self.scaling
-
-
-        lora_out = lora_out.to(base_out.dtype)
+        # LoRA computation - handle dtype properly
+        if input_dtype == torch.float16:
+            # AMP is active: convert to float32 for LoRA, then back to float16
+            lora_out = self.lora_B(self.lora_A(x.float()))
+            lora_out = self.dropout(lora_out) * self.scaling
+            lora_out = lora_out.to(input_dtype)
+        else:
+            # AMP is not active: use original dtype (should be float32)
+            lora_out = self.lora_B(self.lora_A(x))
+            lora_out = self.dropout(lora_out) * self.scaling
         
-        # Convert LoRA output back to input dtype and add to base
         return base_out + lora_out
     
     def get_lora_parameters(self):

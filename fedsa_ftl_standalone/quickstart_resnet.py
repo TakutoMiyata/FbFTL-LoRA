@@ -59,6 +59,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         super().__init__(client_id, model, device)
         self.config = config
         self.use_dp = config.get('privacy', {}).get('enable_privacy', False)
+        self.use_amp = config.get('use_amp', True)  # Get AMP setting from config
         self.aggregation_method = config.get('federated', {}).get('aggregation_method', 'fedavg')
         
         # Initialize optimizer based on aggregation method and privacy settings
@@ -115,8 +116,9 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         num_epochs = training_config.get('epochs', 5)
         microbatch_size = training_config.get('microbatch_size', 8)  # For DP
         
-        # Setup AMP scaler for non-DP training
-        scaler = torch.amp.GradScaler('cuda') if torch.cuda.is_available() and (self.aggregation_method not in ['fedsa_shareA_dp', 'fedsa'] or self.dp_optimizer is None) else None
+        # Setup AMP scaler only if use_amp is enabled
+        scaler = torch.amp.GradScaler('cuda') if (self.use_amp and torch.cuda.is_available() and 
+                                                  (self.aggregation_method not in ['fedsa_shareA_dp', 'fedsa'] or self.dp_optimizer is None)) else None
         
         for epoch in range(num_epochs):
             epoch_loss = 0.0
@@ -138,8 +140,8 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     target_for_loss = target
                     target_for_acc = target
                 
-                # Use autocast for forward pass (both DP and non-DP cases)
-                with torch.amp.autocast('cuda', enabled=scaler is not None):
+                # Use autocast only if AMP is enabled
+                with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
                     output = self.model(data)
                 
                 # Calculate loss with proper reduction for DP
