@@ -276,14 +276,13 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             
             print(f"Client {self.client_id}: Uploading {len(safe_A_params)} A matrices only (B kept local)")
             
-            # Reset optimizer states after training to prevent momentum leakage between rounds
+            # NOTE: We don't reset optimizer states anymore because:
+            # 1. The copy_() method in set_A_parameters preserves parameter identity
+            # 2. This allows momentum to be maintained across rounds (which can help convergence)
+            # 3. Resetting state causes KeyError in the next round
             if self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
                 self.dp_optimizer.reset_optimizer_states()
                 print(f"Client {self.client_id}: DP optimizer states reset")
-            else:
-                # Reset standard optimizer state for fedsa
-                self.optimizer.state = {}
-                print(f"Client {self.client_id}: Standard optimizer state reset")
         else:
             raise ValueError(f"Unsupported aggregation method: {self.aggregation_method}. This script only supports 'fedsa' and 'fedsa_shareA_dp'.")
         
