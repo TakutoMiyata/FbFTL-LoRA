@@ -61,7 +61,6 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         self.use_dp = config.get('privacy', {}).get('enable_privacy', False)
         self.use_amp = config.get('use_amp', True)  # Get AMP setting from config
         self.aggregation_method = config.get('federated', {}).get('aggregation_method', 'fedavg')
-        self.is_first_round = True  # Track if this is the first round
         
         # Initialize optimizer based on aggregation method and privacy settings
         if self.aggregation_method in ['fedsa_shareA_dp', 'fedsa']:
@@ -321,23 +320,11 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             if params_changed:
                 print(f"[WARNING] Client {self.client_id}: Parameter IDs have changed! Optimizer state will be invalid.")
             
-            # IMPORTANT: Only reset optimizer state after we've actually trained
-            # In Round 0 (before first training), there's no state to reset
-            if not self.is_first_round:
-                if hasattr(self, 'optimizer') and self.optimizer is not None:
-                    # Clear all optimizer state to handle new parameter tensors
-                    print(f"[DEBUG] Client {self.client_id}: Clearing optimizer state (post-training)...")
-                    self.optimizer.state = {}
-                    print(f"Client {self.client_id}: Reset optimizer state after A update")
-                
-                # Additional handling for DP optimizer if present
-                if hasattr(self, 'dp_optimizer') and self.dp_optimizer is not None:
-                    self.reset_A_optimizer_state()
-                    print(f"Client {self.client_id}: Reset DP optimizer A state")
-            else:
-                print(f"[DEBUG] Client {self.client_id}: First round - skipping optimizer state reset")
-                # After first round completes, mark it as no longer first round
-                self.is_first_round = False
+            # NOTE: We don't need to reset optimizer state here because:
+            # 1. Optimizer state is already reset after each training round (line 285-286)
+            # 2. The copy_() method in set_A_parameters preserves parameter identity
+            # 3. Resetting here would cause KeyError in the next training round
+            print(f"[DEBUG] Client {self.client_id}: A parameters updated, optimizer state preserved")
     
     def reset_A_optimizer_state(self):
         """Reset optimizer state for A parameters after server update"""
