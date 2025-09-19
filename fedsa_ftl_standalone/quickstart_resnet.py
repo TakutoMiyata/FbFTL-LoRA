@@ -255,7 +255,6 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     print(f"Client {self.client_id}: Privacy ε={custom_eps:.4f} (custom only, install opacus for accurate)")
             
             print(f"Client {self.client_id}: Uploading {len(safe_A_params)} A matrices only (B kept local)")
-            print(f"Client {self.client_id}: A param names: {list(safe_A_params.keys())}")
             
             # Reset optimizer states after training to prevent momentum leakage between rounds
             if self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
