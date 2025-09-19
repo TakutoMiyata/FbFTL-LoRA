@@ -112,10 +112,6 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         self.model.train()
         self.local_data_size = len(dataloader.dataset)
         
-        # Debug: Check optimizer parameters
-        print(f"[DEBUG] Client {self.client_id}: Optimizer has {len(list(self.optimizer.param_groups[0]['params']))} parameters")
-        for i, p in enumerate(self.optimizer.param_groups[0]['params'][:5]):  # Show first 5
-            print(f"[DEBUG]   Param {i}: id={id(p)}, shape={p.shape}, device={p.device}, dtype={p.dtype}")
         
         # Update DP optimizer with actual dataset size for privacy accounting
         if hasattr(self, 'dp_optimizer') and self.dp_optimizer is not None:
@@ -292,38 +288,13 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         """Update model with global A parameters (FedSA-LoRA)"""
         # Only update A parameters, keep B local
         if 'A_params' in global_params:
-            # Debug: Check parameter IDs before update
-            print(f"[DEBUG] Client {self.client_id}: Checking parameter IDs before update...")
-            old_param_ids = {}
-            for name, p in self.model.named_parameters():
-                if 'lora_A' in name and p.requires_grad:
-                    old_param_ids[name] = id(p)
-                    print(f"[DEBUG]   {name}: id={id(p)}, device={p.device}, dtype={p.dtype}")
-            
             self.model.set_A_parameters(global_params['A_params'])
             print(f"Client {self.client_id}: Updated A matrices from server")
             
-            # Debug: Check parameter IDs after update
-            print(f"[DEBUG] Client {self.client_id}: Checking parameter IDs after update...")
-            new_param_ids = {}
-            for name, p in self.model.named_parameters():
-                if 'lora_A' in name and p.requires_grad:
-                    new_param_ids[name] = id(p)
-                    changed = "CHANGED" if old_param_ids.get(name) != id(p) else "SAME"
-                    print(f"[DEBUG]   {name}: id={id(p)}, device={p.device}, dtype={p.dtype} [{changed}]")
-            
-            # Check if parameter IDs have changed
-            params_changed = any(old_param_ids.get(name) != new_param_ids.get(name) 
-                                for name in old_param_ids)
-            
-            if params_changed:
-                print(f"[WARNING] Client {self.client_id}: Parameter IDs have changed! Optimizer state will be invalid.")
-            
             # NOTE: We don't need to reset optimizer state here because:
-            # 1. Optimizer state is already reset after each training round (line 285-286)
-            # 2. The copy_() method in set_A_parameters preserves parameter identity
+            # 1. The copy_() method in set_A_parameters preserves parameter identity
+            # 2. This allows momentum to be maintained across rounds
             # 3. Resetting here would cause KeyError in the next training round
-            print(f"[DEBUG] Client {self.client_id}: A parameters updated, optimizer state preserved")
     
     def reset_A_optimizer_state(self):
         """Reset optimizer state for A parameters after server update"""
