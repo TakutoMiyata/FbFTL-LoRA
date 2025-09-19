@@ -285,10 +285,17 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             self.model.set_A_parameters(global_params['A_params'])
             print(f"Client {self.client_id}: Updated A matrices from server")
             
-            # CRITICAL: Reset A optimizer state after parameter update
+            # CRITICAL: Reset optimizer state after parameter update
+            # This is needed because set_A_parameters creates new tensors
             if hasattr(self, 'dp_optimizer') and self.dp_optimizer is not None:
                 self.reset_A_optimizer_state()
                 print(f"Client {self.client_id}: Reset A optimizer state")
+            else:
+                # For standard optimizer, clear the entire state dict
+                # to avoid KeyError when accessing parameters
+                if hasattr(self, 'optimizer') and self.optimizer is not None:
+                    self.optimizer.state = {}
+                    print(f"Client {self.client_id}: Reset optimizer state after A update")
     
     def reset_A_optimizer_state(self):
         """Reset optimizer state for A parameters after server update"""
