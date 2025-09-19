@@ -139,9 +139,8 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     target_for_acc = target
                 
                 # Use autocast for forward pass (both DP and non-DP cases)
-                with torch.amp.autocast('cuda', enabled=scaler is not None):
-                    output = self.model(data)
-                
+                    with torch.cuda.amp.autocast(dtype=torch.float16):
+                        output = self.model(data.to(torch.float16))                
                 # Calculate loss with proper reduction for DP
                 if self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
                     # DP requires per-sample losses for proper clipping
