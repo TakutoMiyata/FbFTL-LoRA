@@ -68,7 +68,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 # DP optimizer for A matrices only - will update dataset_size in train()
                 self.dp_optimizer = create_dp_optimizer(
                     model, config, 
-                    batch_size=config.get('data', {}).get('batch_size', 64),
+                    batch_size=config.get('data', {}).get('batch_size', 256),  # Use actual batch size from config
                     dataset_size=1000  # Placeholder, updated in train()
                 )
                 self.optimizer = None  # Not used when DP is enabled
@@ -265,9 +265,19 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 noisy_A_params = {}
                 for name, param in safe_A_params.items():
                     # Add calibrated Gaussian noise to each A parameter
-                    std = noise_multiplier * max_grad_norm / math.sqrt(self.local_data_size)
+                    # Using sensitivity = 2 * max_grad_norm * lr / batch_size for gradient-based noise
+                    batch_size = self.config.get('data', {}).get('batch_size', 256)
+                    lr = self.config.get('training', {}).get('lr', 0.001)
+                    sensitivity = 2 * max_grad_norm * lr / batch_size
+                    std = noise_multiplier * sensitivity
                     noise = torch.randn_like(param) * std
                     noisy_A_params[name] = param + noise
+                    
+                    # Debug: Print noise statistics for first parameter
+                    if self.client_id == 0 and 'lora_A.0' in name:
+                        param_norm = torch.norm(param).item()
+                        noise_norm = torch.norm(noise).item()
+                        print(f"  DP Noise Debug - {name}: param_norm={param_norm:.6f}, noise_norm={noise_norm:.6f}, ratio={noise_norm/param_norm:.4f}")
                     
                 # Use noisy parameters for upload
                 safe_A_params = noisy_A_params
