@@ -54,7 +54,7 @@ data:
       enabled: true
       scale_min: 0.5
 evaluation:
-  eval_freq: 5
+  eval_freq: 2
   metric: accuracy
   patience: 30
   save_best_model: true
@@ -96,9 +96,9 @@ reproducibility:
   deterministic: false
 seed: 42
 training:
-  epochs: 1
-  lr: 0.1  # Scaled with larger batch size (256)
-  weight_decay: 0.0005
+  epochs: 2
+  lr: 0.001  # Scaled with larger batch size (256)
+  weight_decay: 0.01
   scheduler: cosine
   warmup_epochs: 2
   label_smoothing: 0.1
