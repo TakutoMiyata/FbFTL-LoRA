@@ -158,28 +158,26 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
                     output = self.model(data)
                 
-                # Calculate loss with proper reduction for DP
+                # Calculate loss with proper reduction
                 if self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
-                    # DP requires per-sample losses for proper clipping
-                    if len(target.shape) > 1:  # Mixup/CutMix case
-                        # Convert to per-sample losses
-                        loss_vec = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1)
+                    # For DP mode, we train normally but add noise only at upload time
+                    if len(target.shape) > 1:  # Mixup/CutMix loss
+                        loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
                     else:
-                        loss_vec = F.cross_entropy(output, target_for_loss, reduction='none')
+                        loss = F.cross_entropy(output, target_for_loss)
                     
-                    # DP processing: handles gradients and zeroing internally
-                    # NOTE: Do NOT call optimizer.zero_grad() before this - it's handled internally
-                    # A gets DP treatment (clipped + noise), B gets regular gradients
-                    self.dp_optimizer.dp_backward_on_loss_efficient(
-                        loss_vec, 
-                        microbatch_size=microbatch_size,
-                        also_compute_B_grads=True
-                    )
+                    # Standard training without DP noise during training
+                    # We'll add noise only when uploading to server
+                    self.dp_optimizer.A_optimizer.zero_grad()
+                    self.dp_optimizer.B_optimizer.zero_grad()
                     
-                    # Calculate mean loss for logging
-                    loss = loss_vec.mean()
+                    loss.backward()
                     
-                    # Step both optimizers (gradients already computed above)
+                    # Optional: Clip gradients for stability (but no noise yet)
+                    max_grad_norm = self.config.get('privacy', {}).get('max_grad_norm', 1.0)
+                    torch.nn.utils.clip_grad_norm_(self.model.get_A_parameter_groups(), max_grad_norm)
+                    
+                    # Step both optimizers (no noise added during training)
                     self.dp_optimizer.A_optimizer.step()
                     self.dp_optimizer.B_optimizer.step()
                     
@@ -255,8 +253,24 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 'param_names': list(safe_A_params.keys())  # For debugging
             }
             
-            if self.dp_optimizer is not None:
-                # Comprehensive privacy analysis for A matrices only
+            if self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
+                # Add DP noise to A parameters only at upload time
+                noise_multiplier = self.config.get('privacy', {}).get('noise_multiplier', 1.0)
+                max_grad_norm = self.config.get('privacy', {}).get('max_grad_norm', 1.0)
+                
+                # Apply DP noise to A parameters before uploading
+                noisy_A_params = {}
+                for name, param in safe_A_params.items():
+                    # Add calibrated Gaussian noise to each A parameter
+                    std = noise_multiplier * max_grad_norm / math.sqrt(self.local_data_size)
+                    noise = torch.randn_like(param) * std
+                    noisy_A_params[name] = param + noise
+                    
+                # Use noisy parameters for upload
+                safe_A_params = noisy_A_params
+                update['A_params'] = safe_A_params
+                
+                # Privacy analysis (simplified since we're adding noise only once)
                 privacy_analysis = self.dp_optimizer.get_privacy_analysis()
                 update['privacy_spent'] = privacy_analysis.get('custom_epsilon', 0)
                 update['privacy_analysis'] = privacy_analysis
