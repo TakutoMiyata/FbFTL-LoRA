@@ -290,9 +290,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             # 1. The copy_() method in set_A_parameters preserves parameter identity
             # 2. This allows momentum to be maintained across rounds (which can help convergence)
             # 3. Resetting state causes KeyError in the next round
-            if self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
-                self.dp_optimizer.reset_optimizer_states()
-                print(f"Client {self.client_id}: DP optimizer states reset")
+            # This applies to both standard and DP optimizers
         else:
             raise ValueError(f"Unsupported aggregation method: {self.aggregation_method}. This script only supports 'fedsa' and 'fedsa_shareA_dp'.")
         
