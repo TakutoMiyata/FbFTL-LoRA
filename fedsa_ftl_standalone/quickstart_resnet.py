@@ -181,6 +181,9 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     self.dp_optimizer.A_optimizer.step()
                     self.dp_optimizer.B_optimizer.step()
                     
+                    # Increment step counter for privacy accounting
+                    self.dp_optimizer.steps += 1
+                    
                 else:
                     # Standard training (non-DP) with AMP
                     if len(target.shape) > 1:  # Mixup/CutMix loss
