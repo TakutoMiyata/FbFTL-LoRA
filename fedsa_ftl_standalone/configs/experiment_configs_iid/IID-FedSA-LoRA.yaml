@@ -96,7 +96,7 @@ reproducibility:
   deterministic: false
 seed: 42
 training:
-  epochs: 2
+  epochs: 3
   lr: 0.001  # Scaled with larger batch size (256)
   weight_decay: 0.01
   scheduler: cosine

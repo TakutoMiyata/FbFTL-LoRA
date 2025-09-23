@@ -20,12 +20,95 @@ from tqdm import tqdm
 # Opacus for differential privacy
 try:
     from opacus import PrivacyEngine
-    from opacus.grad_sample.utils import clear_grad_sample
     OPACUS_AVAILABLE = True
+    # Try to import clear_grad_sample, but don't fail if it doesn't exist
+    try:
+        from opacus.grad_sample.utils import clear_grad_sample
+    except ImportError:
+        try:
+            from opacus.grad_sample import clear_grad_sample
+        except ImportError:
+            clear_grad_sample = None  # Function may not exist in newer versions
 except ImportError:
     OPACUS_AVAILABLE = False
     clear_grad_sample = None
     print("Warning: Opacus not available. Install with: pip install opacus")
+
+
+def manual_clear_grad_sample(model):
+    """
+    Manually clear grad_sample attributes from model parameters.
+    This is a fallback when Opacus clear_grad_sample is not available.
+    
+    Args:
+        model: PyTorch model with potential grad_sample attributes
+    """
+    cleared_count = 0
+    for p in model.parameters():
+        if hasattr(p, 'grad_sample'):
+            delattr(p, 'grad_sample')
+            cleared_count += 1
+    if cleared_count > 0:
+        print(f"🧹 Manually cleared grad_sample from {cleared_count} parameters")
+
+
+def safe_clear_grad_sample(model):
+    """
+    Safely clear grad_sample attributes using Opacus function or manual fallback.
+    
+    Args:
+        model: PyTorch model with potential grad_sample attributes
+    """
+    if clear_grad_sample is not None:
+        try:
+            clear_grad_sample(model)
+        except Exception as e:
+            print(f"Warning: Opacus clear_grad_sample failed: {e}, using manual fallback")
+            manual_clear_grad_sample(model)
+    else:
+        manual_clear_grad_sample(model)
+
+
+def comprehensive_grad_sample_cleanup(model, verbose=False):
+    """
+    Comprehensive cleanup of grad_sample attributes and related Opacus artifacts.
+    
+    Args:
+        model: PyTorch model
+        verbose: Print detailed cleanup information
+    """
+    cleared_params = 0
+    cleared_buffers = 0
+    
+    # Clear grad_sample from parameters
+    for name, param in model.named_parameters():
+        if hasattr(param, 'grad_sample'):
+            delattr(param, 'grad_sample')
+            cleared_params += 1
+            if verbose:
+                print(f"  Cleared grad_sample from parameter: {name}")
+        
+        # Also clear other potential Opacus attributes
+        opacus_attrs = ['_forward_hooks', '_backward_hooks', '_grad_sample']
+        for attr in opacus_attrs:
+            if hasattr(param, attr):
+                try:
+                    delattr(param, attr)
+                    if verbose:
+                        print(f"  Cleared {attr} from parameter: {name}")
+                except:
+                    pass
+    
+    # Clear grad_sample from buffers (less common but possible)
+    for name, buffer in model.named_buffers():
+        if hasattr(buffer, 'grad_sample'):
+            delattr(buffer, 'grad_sample')
+            cleared_buffers += 1
+            if verbose:
+                print(f"  Cleared grad_sample from buffer: {name}")
+    
+    if cleared_params > 0 or cleared_buffers > 0:
+        print(f"🧹 Comprehensive cleanup: {cleared_params} params, {cleared_buffers} buffers")
 
 # Load environment variables from .env file
 def load_env_file(env_path='.env'):
@@ -134,6 +217,9 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         # privacy_mechanismをセッターで設定
         if privacy_mechanism is not None:
             self.set_privacy_mechanism(privacy_mechanism)
+        
+        # Initial cleanup: ensure model starts without any grad_sample artifacts
+        comprehensive_grad_sample_cleanup(self.model, verbose=False)
     
     def train(self, dataloader, training_config):
         """Train the model with A-only DP-SGD and non-DP B+classifier"""
@@ -228,8 +314,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                         self.dp_optimizer.step()
                         
                         # Clear grad_sample after A phase to prevent contamination
-                        if clear_grad_sample is not None:
-                            clear_grad_sample(self.model)
+                        safe_clear_grad_sample(self.model)
                         
                         # === Phase B: Non-DP personalization on B+classifier ===
                         # Clear gradients efficiently
@@ -256,13 +341,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                         self.local_optimizer.step()
                         
                         # Clear grad_sample from Opacus (important for memory)
-                        if clear_grad_sample is not None:
-                            clear_grad_sample(self.model)
-                        else:
-                            # Fallback: manually remove grad_sample attributes
-                            for p in self.model.parameters():
-                                if hasattr(p, 'grad_sample'):
-                                    delattr(p, 'grad_sample')
+                        safe_clear_grad_sample(self.model)
                         
                         # Combined loss for logging
                         loss = (loss_A + loss_B) / 2
@@ -407,6 +486,10 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             # 2. This allows momentum to be maintained across rounds (which can help convergence)
             # 3. Resetting state causes KeyError in the next round
             # This applies to both standard and DP optimizers
+            
+            # Final cleanup: ensure no grad_sample attributes remain
+            comprehensive_grad_sample_cleanup(self.model, verbose=False)
+            
         else:
             raise ValueError(f"Unsupported aggregation method: {self.aggregation_method}. This script only supports 'fedsa' and 'fedsa_shareA_dp'.")
         

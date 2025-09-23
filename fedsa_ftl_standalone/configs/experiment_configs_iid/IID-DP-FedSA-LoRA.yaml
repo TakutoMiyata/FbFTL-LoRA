@@ -68,7 +68,7 @@ experiment:
   wandb_entity: null
   wandb_project: fedsa-ftl-resnet
 federated:
-  aggregation_method: fedsa
+  aggregation_method: fedsa_shareA_dp
   checkpoint_freq: 25
   client_fraction: 1.0
   num_clients: 10
@@ -88,19 +88,19 @@ privacy:
   delta: 1.0e-05
   enable_privacy: true
   epsilon: 8.0
-  max_grad_norm: 0.5
-  noise_multiplier: 1.0
+  max_grad_norm: 1.0
+  noise_multiplier: 0.5
   target: lora_A
   use_opacus_accounting: true
 reproducibility:
   deterministic: false
 seed: 42
 training:
-  epochs: 2
-  lr: 0.001  # Scaled with larger batch size (256)
-  weight_decay: 0.01
+  epochs: 3
+  lr: 0.01  # Scaled with larger batch size (256)
+  weight_decay: 0.001
   scheduler: cosine
-  warmup_epochs: 2
+  warmup_epochs: 0
   label_smoothing: 0.1
   gradient_clip: 1.0
   optimizer: sgd
