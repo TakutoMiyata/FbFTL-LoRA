@@ -17,6 +17,14 @@ import time
 from datetime import datetime
 from tqdm import tqdm
 
+# Opacus for differential privacy
+try:
+    from opacus import PrivacyEngine
+    OPACUS_AVAILABLE = True
+except ImportError:
+    OPACUS_AVAILABLE = False
+    print("Warning: Opacus not available. Install with: pip install opacus")
+
 # Load environment variables from .env file
 def load_env_file(env_path='.env'):
     """Load environment variables from .env file"""
@@ -47,7 +55,7 @@ from fedsa_ftl_server import FedSAFTLServer
 from data_utils import prepare_federated_data, get_client_dataloader, MixupCutmixCollate
 from privacy_utils import DifferentialPrivacy
 from notification_utils import SlackNotifier
-from dp_utils import create_dp_optimizer, WeightedFedAvg
+from dp_utils import WeightedFedAvg
 import torch.nn.functional as F
 import math
 
@@ -59,46 +67,33 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         super().__init__(client_id, model, device)
         self.config = config
         self.use_dp = config.get('privacy', {}).get('enable_privacy', False)
-        self.use_amp = config.get('use_amp', True)  # Get AMP setting from config
+        # Force AMP disabled when DP is enabled
+        self.use_amp = False if self.use_dp else config.get('use_amp', True)
         self.aggregation_method = config.get('federated', {}).get('aggregation_method', 'fedavg')
         
-        # Initialize optimizer based on aggregation method and privacy settings
-        if self.aggregation_method in ['fedsa_shareA_dp', 'fedsa']:
-            if self.use_dp and (self.aggregation_method == 'fedsa_shareA_dp' or self.aggregation_method == 'fedsa'):
-                # DP optimizer for A matrices only - will update dataset_size in train()
-                self.dp_optimizer = create_dp_optimizer(
-                    model, config, 
-                    batch_size=config.get('data', {}).get('batch_size', 256),  # Use actual batch size from config
-                    dataset_size=1000  # Placeholder, updated in train()
-                )
-                self.optimizer = None  # Not used when DP is enabled
-                print(f"Client {client_id}: Initialized DP optimizer for A matrices only")
-            else:
-                # Regular optimizer for FedSA without DP
-                training_config = config.get('training', {})
-                # Only optimize parameters that require gradients (LoRA and classifier)
-                trainable_params = [p for p in model.parameters() if p.requires_grad]
-                print(f"Client {client_id}: Optimizer will track {len(trainable_params)} trainable parameters")
-                self.optimizer = torch.optim.SGD(
-                    trainable_params,  # Only trainable parameters
-                    lr=training_config.get('lr', 0.001),
-                    momentum=training_config.get('momentum', 0.9),
-                    weight_decay=training_config.get('weight_decay', 0.0001)
-                )
-                self.dp_optimizer = None
+        # Initialize standard SGD optimizer for trainable parameters
+        training_config = config.get('training', {})
+        trainable_params = [p for p in model.parameters() if p.requires_grad]
+        print(f"Client {client_id}: Optimizer will track {len(trainable_params)} trainable parameters")
+        
+        self.optimizer = torch.optim.SGD(
+            trainable_params,
+            lr=training_config.get('lr', 0.001),
+            momentum=training_config.get('momentum', 0.9),
+            weight_decay=training_config.get('weight_decay', 0.0001)
+        )
+        
+        # Initialize Opacus PrivacyEngine for DP mode
+        if self.use_dp and OPACUS_AVAILABLE:
+            self.privacy_engine = PrivacyEngine()
+            self.privacy_engine_attached = False
+            print(f"Client {client_id}: Initialized Opacus PrivacyEngine for DP-SGD")
         else:
-            # Standard federated learning optimizer
-            training_config = config.get('training', {})
-            # Only optimize parameters that require gradients
-            trainable_params = [p for p in model.parameters() if p.requires_grad]
-            print(f"Client {client_id}: Optimizer will track {len(trainable_params)} trainable parameters")
-            self.optimizer = torch.optim.SGD(
-                trainable_params,  # Only trainable parameters
-                lr=training_config.get('lr', 0.001),
-                momentum=training_config.get('momentum', 0.9),
-                weight_decay=training_config.get('weight_decay', 0.0001)
-            )
-            self.dp_optimizer = None
+            self.privacy_engine = None
+            self.privacy_engine_attached = False
+            
+        # Remove old DP optimizer
+        self.dp_optimizer = None
         
         # Track local data size for weighted aggregation
         self.local_data_size = 0
@@ -108,27 +103,34 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             self.set_privacy_mechanism(privacy_mechanism)
     
     def train(self, dataloader, training_config):
-        """Train the model with DP-LoRA support"""
+        """Train the model with Opacus DP-SGD support"""
         self.model.train()
         self.local_data_size = len(dataloader.dataset)
         
-        
-        # Update DP optimizer with actual dataset size for privacy accounting
-        if hasattr(self, 'dp_optimizer') and self.dp_optimizer is not None:
-            self.dp_optimizer.update_dataset_size(self.local_data_size)
+        # Initialize Opacus PrivacyEngine if DP is enabled and not already attached
+        if self.use_dp and self.privacy_engine is not None:
+            if not self.privacy_engine_attached:
+                noise_multiplier = self.config.get('privacy', {}).get('noise_multiplier', 1.0)
+                max_grad_norm = self.config.get('privacy', {}).get('max_grad_norm', 0.5)
+                
+                self.model, self.optimizer, dataloader = self.privacy_engine.make_private(
+                    module=self.model,
+                    optimizer=self.optimizer,
+                    data_loader=dataloader,
+                    noise_multiplier=noise_multiplier,
+                    max_grad_norm=max_grad_norm,
+                )
+                self.privacy_engine_attached = True
+                print(f"Client {self.client_id}: PrivacyEngine attached with σ={noise_multiplier}, C={max_grad_norm}")
         
         total_loss = 0.0
         correct = 0
         total = 0
         num_epochs = training_config.get('epochs', 5)
-        microbatch_size = training_config.get('microbatch_size', 8)  # For DP
         
-        # Setup AMP scaler only if use_amp is enabled and model is not already half precision
-        # If model is already half precision, scaler is not needed
+        # Setup AMP scaler only if use_amp is enabled (disabled for DP)
         model_is_half = next(self.model.parameters()).dtype == torch.float16
-        scaler = torch.amp.GradScaler('cuda') if (self.use_amp and torch.cuda.is_available() and 
-                                                  not model_is_half and
-                                                  (self.aggregation_method not in ['fedsa_shareA_dp', 'fedsa'] or self.dp_optimizer is None)) else None
+        scaler = torch.amp.GradScaler('cuda') if (self.use_amp and torch.cuda.is_available() and not model_is_half) else None
         
         for epoch in range(num_epochs):
             epoch_loss = 0.0
@@ -159,49 +161,23 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     output = self.model(data)
                 
                 # Calculate loss with proper reduction
-                if self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
-                    # For DP mode, we train normally but add noise only at upload time
-                    if len(target.shape) > 1:  # Mixup/CutMix loss
-                        loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
-                    else:
-                        loss = F.cross_entropy(output, target_for_loss)
-                    
-                    # Standard training without DP noise during training
-                    # We'll add noise only when uploading to server
-                    self.dp_optimizer.A_optimizer.zero_grad()
-                    self.dp_optimizer.B_optimizer.zero_grad()
-                    
-                    loss.backward()
-                    
-                    # Optional: Clip gradients for stability (but no noise yet)
-                    max_grad_norm = self.config.get('privacy', {}).get('max_grad_norm', 1.0)
-                    torch.nn.utils.clip_grad_norm_(self.model.get_A_parameter_groups(), max_grad_norm)
-                    
-                    # Step both optimizers (no noise added during training)
-                    self.dp_optimizer.A_optimizer.step()
-                    self.dp_optimizer.B_optimizer.step()
-                    
-                    # Increment step counter for privacy accounting
-                    self.dp_optimizer.steps += 1
-                    
+                if len(target.shape) > 1:  # Mixup/CutMix loss
+                    loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
                 else:
-                    # Standard training (non-DP) with AMP
-                    if len(target.shape) > 1:  # Mixup/CutMix loss
-                        loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
-                    else:
-                        loss = F.cross_entropy(output, target_for_loss)
-                    
-                    self.optimizer.zero_grad()
-                    
-                    if scaler is not None:
-                        # Use AMP scaler
-                        scaler.scale(loss).backward()
-                        scaler.step(self.optimizer)
-                        scaler.update()
-                    else:
-                        # Fallback to standard training
-                        loss.backward()
-                        self.optimizer.step()
+                    loss = F.cross_entropy(output, target_for_loss)
+                
+                # Standard training loop (DP handled automatically by Opacus if enabled)
+                self.optimizer.zero_grad()
+                
+                if scaler is not None:
+                    # Use AMP scaler (only when DP is disabled)
+                    scaler.scale(loss).backward()
+                    scaler.step(self.optimizer)
+                    scaler.update()
+                else:
+                    # Standard training (with Opacus DP-SGD if enabled)
+                    loss.backward()
+                    self.optimizer.step()
                 
                 # Track metrics
                 epoch_loss += loss.item()
@@ -256,46 +232,29 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 'param_names': list(safe_A_params.keys())  # For debugging
             }
             
-            if self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
-                # Add DP noise to A parameters only at upload time
-                noise_multiplier = self.config.get('privacy', {}).get('noise_multiplier', 1.0)
-                max_grad_norm = self.config.get('privacy', {}).get('max_grad_norm', 1.0)
-                
-                # Apply DP noise to A parameters before uploading
-                noisy_A_params = {}
-                for name, param in safe_A_params.items():
-                    # Add calibrated Gaussian noise to each A parameter
-                    # Using sensitivity = 2 * max_grad_norm * lr / batch_size for gradient-based noise
-                    batch_size = self.config.get('data', {}).get('batch_size', 256)
-                    lr = self.config.get('training', {}).get('lr', 0.001)
-                    sensitivity = 2 * max_grad_norm * lr / batch_size
-                    std = noise_multiplier * sensitivity
-                    noise = torch.randn_like(param) * std
-                    noisy_A_params[name] = param + noise
+            # Add privacy tracking for DP mode
+            if self.use_dp and self.privacy_engine is not None:
+                try:
+                    delta = self.config.get('privacy', {}).get('delta', 1e-5)
+                    epsilon = self.privacy_engine.get_epsilon(delta=delta)
+                    noise_multiplier = self.config.get('privacy', {}).get('noise_multiplier', 1.0)
+                    max_grad_norm = self.config.get('privacy', {}).get('max_grad_norm', 0.5)
                     
-                    # Debug: Print noise statistics for first parameter
-                    if self.client_id == 0 and 'lora_A.0' in name:
-                        param_norm = torch.norm(param).item()
-                        noise_norm = torch.norm(noise).item()
-                        print(f"  DP Noise Debug - {name}: param_norm={param_norm:.6f}, noise_norm={noise_norm:.6f}, ratio={noise_norm/param_norm:.4f}")
+                    update['privacy_spent'] = epsilon
+                    update['privacy_analysis'] = {
+                        'epsilon': epsilon,
+                        'delta': delta,
+                        'noise_multiplier': noise_multiplier,
+                        'max_grad_norm': max_grad_norm,
+                        'method': 'Opacus DP-SGD'
+                    }
+                    update['privacy_note'] = 'DP applied during training via Opacus'
                     
-                # Use noisy parameters for upload
-                safe_A_params = noisy_A_params
-                update['A_params'] = safe_A_params
-                
-                # Privacy analysis (simplified since we're adding noise only once)
-                privacy_analysis = self.dp_optimizer.get_privacy_analysis()
-                update['privacy_spent'] = privacy_analysis.get('custom_epsilon', 0)
-                update['privacy_analysis'] = privacy_analysis
-                update['privacy_note'] = 'DP applied to A matrices only'
-                
-                # Log privacy info for this client
-                custom_eps = privacy_analysis.get('custom_epsilon', 0)
-                opacus_eps = privacy_analysis.get('opacus_epsilon')
-                if opacus_eps != 'Not available':
-                    print(f"Client {self.client_id}: Privacy ε={custom_eps:.4f} (custom), ε={opacus_eps:.4f} (Opacus)")
-                else:
-                    print(f"Client {self.client_id}: Privacy ε={custom_eps:.4f} (custom only, install opacus for accurate)")
+                    print(f"Client {self.client_id}: Privacy ε={epsilon:.4f} (Opacus DP-SGD, δ={delta})")
+                except Exception as e:
+                    print(f"Client {self.client_id}: Could not compute privacy epsilon: {e}")
+                    update['privacy_spent'] = 0
+                    update['privacy_analysis'] = {'error': str(e)}
             
             print(f"Client {self.client_id}: Uploading {len(safe_A_params)} A matrices only (B kept local)")
             
@@ -557,7 +516,6 @@ def main():
         # Use ImageNet-style backbone with LoRA
         print(f"Creating ImageNet-style {config['model']['model_name']} model...")
         initial_model = make_model_with_lora(config)
-        initial_model = initial_model.half()  # Convert to half precision for AMP compatibility
         initial_model = initial_model.to(device)  # Move to GPU
         print_model_summary(config, initial_model)
     else:
@@ -642,7 +600,6 @@ def main():
         # Create client model (same architecture as initial model)
         if use_imagenet_style:
             client_model = make_model_with_lora(config)
-            client_model = client_model.half()  # Convert to half precision for AMP compatibility
             client_model = client_model.to(device)  # Move to GPU
         else:
             model_config = config['model'].copy()
@@ -805,28 +762,25 @@ def main():
         if config.get('privacy', {}).get('enable_privacy', False):
             privacy_analyses = [update.get('privacy_analysis', {}) for update in client_updates if 'privacy_analysis' in update]
             if privacy_analyses:
-                # Average privacy metrics across clients
-                avg_custom_eps = sum(analysis.get('custom_epsilon', 0) for analysis in privacy_analyses) / len(privacy_analyses)
+                # Average privacy metrics across clients (using unified 'epsilon' key)
+                epsilons = [analysis.get('epsilon', 0) for analysis in privacy_analyses if 'epsilon' in analysis]
                 
-                print(f"\n  === Privacy Analysis (A matrices only) ===")
-                print(f"  Custom RDP approximation: ε={avg_custom_eps:.4f}")
-                
-                # Show Opacus results if available
-                opacus_epsilons = [analysis.get('opacus_epsilon') for analysis in privacy_analyses if analysis.get('opacus_epsilon') != 'Not available']
-                if opacus_epsilons:
-                    avg_opacus_eps = sum(opacus_epsilons) / len(opacus_epsilons)
-                    print(f"  Opacus RDP accounting: ε={avg_opacus_eps:.4f} (recommended for academic use)")
+                if epsilons:
+                    avg_eps = sum(epsilons) / len(epsilons)
+                    print(f"\n  === Privacy Analysis (Opacus DP-SGD) ===")
+                    print(f"  Current ε: {avg_eps:.4f}")
                     print(f"  Privacy Budget: ε≤{config['privacy'].get('epsilon', 8.0)}")
-                else:
-                    print(f"  Opacus accounting: Not available (install opacus for accurate ε)")
-                
-                # Show key privacy parameters
-                if privacy_analyses:
+                    print(f"  δ: {config['privacy'].get('delta', 1e-5)}")
+                    
+                    # Show key privacy parameters from first client
                     sample_analysis = privacy_analyses[0]
-                    print(f"  Sampling ratio: {sample_analysis.get('sampling_ratio', 0):.4f}")
-                    print(f"  Noise multiplier: {sample_analysis.get('noise_multiplier', 0)}")
-                    print(f"  Steps taken: {sample_analysis.get('steps_taken', 0)}")
-                    print(f"  Note: Privacy protection applied only to shared A matrices")
+                    print(f"  Noise multiplier (σ): {sample_analysis.get('noise_multiplier', 'N/A')}")
+                    print(f"  Max gradient norm (C): {sample_analysis.get('max_grad_norm', 'N/A')}")
+                    print(f"  Method: {sample_analysis.get('method', 'Opacus DP-SGD')}")
+                    print(f"  Note: DP applied during training to LoRA and classifier parameters")
+                else:
+                    print(f"\n  === Privacy Analysis ===")
+                    print(f"  Privacy tracking unavailable - check Opacus installation")
                 print(f"  =============================================")
         
         round_stats = {
