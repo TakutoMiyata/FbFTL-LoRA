@@ -288,8 +288,9 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 
                 # DP training with A-only noise (simplified approach for Opacus compatibility)
                 if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
-                    # Clear gradients
-                    self.model.zero_grad(set_to_none=True)
+                    # Clear gradients for both optimizers (required by Opacus)
+                    self.dp_optimizer.zero_grad()
+                    self.local_optimizer.zero_grad()
                     
                     # Enable all parameters
                     for p in self.A_params:
