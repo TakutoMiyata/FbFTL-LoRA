@@ -20,9 +20,11 @@ from tqdm import tqdm
 # Opacus for differential privacy
 try:
     from opacus import PrivacyEngine
+    from opacus.grad_sample.utils import clear_grad_sample
     OPACUS_AVAILABLE = True
 except ImportError:
     OPACUS_AVAILABLE = False
+    clear_grad_sample = None
     print("Warning: Opacus not available. Install with: pip install opacus")
 
 # Load environment variables from .env file
@@ -71,29 +73,60 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         self.use_amp = False if self.use_dp else config.get('use_amp', True)
         self.aggregation_method = config.get('federated', {}).get('aggregation_method', 'fedavg')
         
-        # Initialize standard SGD optimizer for trainable parameters
-        training_config = config.get('training', {})
-        trainable_params = [p for p in model.parameters() if p.requires_grad]
-        print(f"Client {client_id}: Optimizer will track {len(trainable_params)} trainable parameters")
+        # Store core model reference for safe access after Opacus wrapping
+        self.core_model = model
         
-        self.optimizer = torch.optim.SGD(
-            trainable_params,
+        # Get training configuration
+        training_config = config.get('training', {})
+        opt_kwargs = dict(
             lr=training_config.get('lr', 0.001),
             momentum=training_config.get('momentum', 0.9),
             weight_decay=training_config.get('weight_decay', 0.0001)
         )
         
-        # Initialize Opacus PrivacyEngine for DP mode
-        if self.use_dp and OPACUS_AVAILABLE:
-            self.privacy_engine = PrivacyEngine()
-            self.privacy_engine_attached = False
-            print(f"Client {client_id}: Initialized Opacus PrivacyEngine for DP-SGD")
+        if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp':
+            # Separate A and B parameters for differential treatment
+            self.A_params = list(model.get_A_parameter_groups())  # LoRA A matrices only
+            self.B_params = list(model.get_B_parameter_groups())  # LoRA B matrices
+            
+            # Get classifier parameters (to be included with B as non-DP)
+            cls_params = []
+            if hasattr(model, 'classifier'):
+                cls_params = list(model.classifier.parameters())
+            elif hasattr(model, 'fc'):
+                cls_params = list(model.fc.parameters())
+            elif hasattr(model, 'head'):
+                cls_params = list(model.head.parameters())
+            
+            # Local parameters = B + classifier (non-DP, personalized)
+            self.local_params = self.B_params + cls_params
+            
+            # Create two separate optimizers
+            self.dp_optimizer = torch.optim.SGD(self.A_params, **opt_kwargs)  # For A (will be DP)
+            self.local_optimizer = torch.optim.SGD(self.local_params, **opt_kwargs)  # For B+cls (non-DP)
+            
+            print(f"Client {client_id}: A params (DP): {len(self.A_params)}, B+cls params (non-DP): {len(self.local_params)}")
+            
+            # Initialize Opacus PrivacyEngine for A-only DP
+            if OPACUS_AVAILABLE:
+                self.privacy_engine = PrivacyEngine()
+                self.privacy_engine_attached = False
+                print(f"Client {client_id}: Initialized Opacus PrivacyEngine for A-only DP-SGD")
+            
+            # For compatibility, set optimizer to None when using separated optimizers
+            self.optimizer = None
         else:
+            # Standard single optimizer for all trainable parameters
+            trainable_params = [p for p in model.parameters() if p.requires_grad]
+            print(f"Client {client_id}: Single optimizer tracking {len(trainable_params)} trainable parameters")
+            
+            self.optimizer = torch.optim.SGD(trainable_params, **opt_kwargs)
+            
+            # No DP or separated optimizers
+            self.dp_optimizer = None
+            self.local_optimizer = None
             self.privacy_engine = None
             self.privacy_engine_attached = False
-            
-        # Remove old DP optimizer
-        self.dp_optimizer = None
         
         # Track local data size for weighted aggregation
         self.local_data_size = 0
@@ -103,25 +136,36 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             self.set_privacy_mechanism(privacy_mechanism)
     
     def train(self, dataloader, training_config):
-        """Train the model with Opacus DP-SGD support"""
+        """Train the model with A-only DP-SGD and non-DP B+classifier"""
         self.model.train()
         self.local_data_size = len(dataloader.dataset)
         
-        # Initialize Opacus PrivacyEngine if DP is enabled and not already attached
-        if self.use_dp and self.privacy_engine is not None:
-            if not self.privacy_engine_attached:
-                noise_multiplier = self.config.get('privacy', {}).get('noise_multiplier', 1.0)
-                max_grad_norm = self.config.get('privacy', {}).get('max_grad_norm', 0.5)
-                
-                self.model, self.optimizer, dataloader = self.privacy_engine.make_private(
+        # Handle DP setup for A-only optimization
+        if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.privacy_engine is not None:
+            try:
+                from opacus.grad_sample import GradSampleModule
+            except ImportError:
+                GradSampleModule = None
+            
+            noise_multiplier = self.config.get('privacy', {}).get('noise_multiplier', 1.0)
+            max_grad_norm = self.config.get('privacy', {}).get('max_grad_norm', 0.5)
+            
+            # Check if model is already wrapped
+            if GradSampleModule and isinstance(self.model, GradSampleModule):
+                # Already wrapped, just update dataloader with DP sampling
+                # Note: Opacus might not support re-wrapping, so we keep existing setup
+                print(f"Client {self.client_id}: Model already wrapped with GradSampleModule")
+            else:
+                # First time: wrap model and A-optimizer with PrivacyEngine
+                self.model, self.dp_optimizer, dataloader = self.privacy_engine.make_private(
                     module=self.model,
-                    optimizer=self.optimizer,
+                    optimizer=self.dp_optimizer,  # Only A parameters
                     data_loader=dataloader,
                     noise_multiplier=noise_multiplier,
                     max_grad_norm=max_grad_norm,
                 )
                 self.privacy_engine_attached = True
-                print(f"Client {self.client_id}: PrivacyEngine attached with σ={noise_multiplier}, C={max_grad_norm}")
+                print(f"Client {self.client_id}: PrivacyEngine attached for A-only with σ={noise_multiplier}, C={max_grad_norm}")
         
         total_loss = 0.0
         correct = 0
@@ -156,28 +200,102 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     target_for_loss = target
                     target_for_acc = target
                 
-                # Use autocast only if AMP is enabled
-                with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
-                    output = self.model(data)
-                
-                # Calculate loss with proper reduction
-                if len(target.shape) > 1:  # Mixup/CutMix loss
-                    loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
+                # Two-phase training for DP A-only mode
+                if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
+                    try:
+                        # === Phase A: DP-SGD on A parameters only ===
+                        # Clear gradients efficiently
+                        self.model.zero_grad(set_to_none=True)
+                        
+                        # Freeze B+classifier, enable A
+                        for p in self.local_params:
+                            p.requires_grad = False
+                        for p in self.A_params:
+                            p.requires_grad = True
+                        
+                        # Forward pass for A (AMP always disabled for DP)
+                        with torch.amp.autocast('cuda', enabled=False):
+                            output_A = self.model(data)
+                        
+                        if len(target.shape) > 1:  # Mixup/CutMix loss
+                            loss_A = -(target_for_loss * F.log_softmax(output_A, dim=1)).sum(dim=1).mean()
+                        else:
+                            loss_A = F.cross_entropy(output_A, target_for_loss)
+                        
+                        # Backward and step for A (with DP noise via Opacus)
+                        self.dp_optimizer.zero_grad(set_to_none=True)
+                        loss_A.backward()
+                        self.dp_optimizer.step()
+                        
+                        # Clear grad_sample after A phase to prevent contamination
+                        if clear_grad_sample is not None:
+                            clear_grad_sample(self.model)
+                        
+                        # === Phase B: Non-DP personalization on B+classifier ===
+                        # Clear gradients efficiently
+                        self.model.zero_grad(set_to_none=True)
+                        
+                        # Freeze A, enable B+classifier
+                        for p in self.A_params:
+                            p.requires_grad = False
+                        for p in self.local_params:
+                            p.requires_grad = True
+                        
+                        # Forward pass for B+classifier (AMP disabled for consistency)
+                        with torch.amp.autocast('cuda', enabled=False):
+                            output = self.model(data)
+                        
+                        if len(target.shape) > 1:  # Mixup/CutMix loss
+                            loss_B = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
+                        else:
+                            loss_B = F.cross_entropy(output, target_for_loss)
+                        
+                        # Backward and step for B+classifier (no DP)
+                        self.local_optimizer.zero_grad(set_to_none=True)
+                        loss_B.backward()
+                        self.local_optimizer.step()
+                        
+                        # Clear grad_sample from Opacus (important for memory)
+                        if clear_grad_sample is not None:
+                            clear_grad_sample(self.model)
+                        else:
+                            # Fallback: manually remove grad_sample attributes
+                            for p in self.model.parameters():
+                                if hasattr(p, 'grad_sample'):
+                                    delattr(p, 'grad_sample')
+                        
+                        # Combined loss for logging
+                        loss = (loss_A + loss_B) / 2
+                        
+                    finally:
+                        # Always re-enable all gradients for safety (even on exception)
+                        for p in self.A_params:
+                            p.requires_grad = True
+                        for p in self.local_params:
+                            p.requires_grad = True
+                    
                 else:
-                    loss = F.cross_entropy(output, target_for_loss)
-                
-                # Standard training loop (DP handled automatically by Opacus if enabled)
-                self.optimizer.zero_grad()
-                
-                if scaler is not None:
-                    # Use AMP scaler (only when DP is disabled)
-                    scaler.scale(loss).backward()
-                    scaler.step(self.optimizer)
-                    scaler.update()
-                else:
-                    # Standard training (with Opacus DP-SGD if enabled)
-                    loss.backward()
-                    self.optimizer.step()
+                    # Standard single-optimizer training
+                    # Use autocast only if AMP is enabled
+                    with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
+                        output = self.model(data)
+                    
+                    if len(target.shape) > 1:  # Mixup/CutMix loss
+                        loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
+                    else:
+                        loss = F.cross_entropy(output, target_for_loss)
+                    
+                    self.optimizer.zero_grad()
+                    
+                    if scaler is not None:
+                        # Use AMP scaler (only when DP is disabled)
+                        scaler.scale(loss).backward()
+                        scaler.step(self.optimizer)
+                        scaler.update()
+                    else:
+                        # Standard training
+                        loss.backward()
+                        self.optimizer.step()
                 
                 # Track metrics
                 epoch_loss += loss.item()
@@ -221,6 +339,20 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 missing = A_whitelist - A_param_names
                 raise ValueError(f"INTEGRITY ERROR: Missing A parameters: {missing}")
             
+            # Step 5: Additional check - ensure classifier params are NOT in A_params (defense in depth)
+            cls_param_names = set()
+            for attr in ('classifier', 'fc', 'head'):
+                if hasattr(self.model, attr):
+                    cls_param_names |= {n for n, _ in getattr(self.model, attr).named_parameters()}
+            
+            if cls_param_names:  # Only check if we found classifier-like params
+                for a_key in safe_A_params.keys():
+                    for cls_name in cls_param_names:
+                        if cls_name in a_key or a_key.endswith(cls_name):
+                            raise ValueError(
+                                f"SECURITY ALERT: Classifier-like parameter '{cls_name}' detected in A_params upload"
+                            )
+            
             update = {
                 'A_params': safe_A_params,  # Server expects 'A_params' key
                 'num_samples': self.local_data_size,  # Server expects 'num_samples' for weighted aggregation
@@ -233,12 +365,21 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             }
             
             # Add privacy tracking for DP mode
-            if self.use_dp and self.privacy_engine is not None:
+            if self.use_dp and self.privacy_engine is not None and self.aggregation_method == 'fedsa_shareA_dp':
                 try:
                     delta = self.config.get('privacy', {}).get('delta', 1e-5)
-                    epsilon = self.privacy_engine.get_epsilon(delta=delta)
+                    # Try both APIs for compatibility with different Opacus versions
+                    try:
+                        epsilon = self.privacy_engine.accountant.get_epsilon(delta=delta) \
+                                  if hasattr(self.privacy_engine, 'accountant') \
+                                  else self.privacy_engine.get_epsilon(delta=delta)
+                    except:
+                        epsilon = self.privacy_engine.get_epsilon(delta=delta)
+                    
                     noise_multiplier = self.config.get('privacy', {}).get('noise_multiplier', 1.0)
                     max_grad_norm = self.config.get('privacy', {}).get('max_grad_norm', 0.5)
+                    batch_size = self.config.get('data', {}).get('batch_size', 256)
+                    sample_rate = batch_size / self.local_data_size if self.local_data_size > 0 else 0
                     
                     update['privacy_spent'] = epsilon
                     update['privacy_analysis'] = {
@@ -246,11 +387,14 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                         'delta': delta,
                         'noise_multiplier': noise_multiplier,
                         'max_grad_norm': max_grad_norm,
-                        'method': 'Opacus DP-SGD'
+                        'batch_size': batch_size,
+                        'sample_rate': sample_rate,
+                        'dataset_size': self.local_data_size,
+                        'method': 'Opacus DP-SGD (A-only)'
                     }
-                    update['privacy_note'] = 'DP applied during training via Opacus'
+                    update['privacy_note'] = 'DP applied to LoRA-A only; LoRA-B + classifier are local (non-DP)'
                     
-                    print(f"Client {self.client_id}: Privacy ε={epsilon:.4f} (Opacus DP-SGD, δ={delta})")
+                    print(f"Client {self.client_id}: Privacy ε={epsilon:.4f} (Opacus A-only DP-SGD, δ={delta}, σ={noise_multiplier})")
                 except Exception as e:
                     print(f"Client {self.client_id}: Could not compute privacy epsilon: {e}")
                     update['privacy_spent'] = 0
@@ -282,12 +426,9 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
     
     def reset_A_optimizer_state(self):
         """Reset optimizer state for A parameters after server update"""
-        if hasattr(self, 'dp_optimizer') and self.dp_optimizer is not None:
-            # Clear momentum and other state for A parameters
-            for p in self.model.get_A_parameter_groups():
-                if p in self.dp_optimizer.A_optimizer.state:
-                    self.dp_optimizer.A_optimizer.state[p].clear()
-            print(f"Client {self.client_id}: Cleared A optimizer momentum/state")
+        # No-op: using single SGD as dp_optimizer (not DPFedSAOptimizer)
+        # State preservation is handled by parameter identity preservation in set_A_parameters
+        pass
     
     def get_model_size(self):
         """Get model size information"""
@@ -446,7 +587,11 @@ def main():
     opacus_flag = config.get('privacy', {}).get('use_opacus_accounting', True)
     print(f"Privacy: {'Enabled' if privacy_enabled else 'Disabled'}")
     if privacy_enabled:
-        print(f"Privacy Method: Custom DP-SGD + {'Opacus RDP' if opacus_flag else 'Custom RDP'} accounting")
+        agg_method = config['federated'].get('aggregation_method', 'fedsa')
+        if agg_method == 'fedsa_shareA_dp':
+            print("Privacy Method: Opacus DP-SGD (A-only, RDP accountant)")
+        else:
+            print("Privacy Method: Opacus DP-SGD (RDP accountant)")
     print("=" * 80)
     
     # Set seed comprehensively for reproducibility
@@ -463,6 +608,16 @@ def main():
             torch.backends.cudnn.benchmark = False
         else:
             torch.backends.cudnn.benchmark = True
+    
+    # Check Opacus availability if privacy is enabled
+    if config.get('privacy', {}).get('enable_privacy', False):
+        if not OPACUS_AVAILABLE:
+            raise RuntimeError(
+                "Privacy is enabled but Opacus is not installed. "
+                "Install with: pip install opacus\n"
+                "Or disable privacy by setting privacy.enable_privacy: false"
+            )
+        print("✅ Opacus is available for Differential Privacy")
     
     # Prepare data with appropriate transforms
     print("\nPreparing federated data...")
@@ -749,9 +904,19 @@ def main():
         # Log aggregation info
         WeightedFedAvg.log_aggregation_info(client_sample_counts, len(aggregated_A))
         
-        # Calculate communication cost (only A matrices)
+        # Calculate communication cost (only A matrices, dtype-aware)
+        def get_bytes_per_param(tensor):
+            """Get bytes per parameter based on dtype"""
+            if tensor.dtype in (torch.float16, torch.bfloat16):
+                return 2
+            else:  # float32, int32, etc.
+                return 4
+        
+        total_bytes = sum(p.numel() * get_bytes_per_param(p) for p in aggregated_A.values())
+        communication_cost_mb = total_bytes / (1024 * 1024)
+        
+        # Also track parameter count for statistics
         total_A_params = sum(p.numel() for p in aggregated_A.values())
-        communication_cost_mb = (total_A_params * 4) / (1024 * 1024)  # 4 bytes per float32
         
         # Verify only A parameters were uploaded
         for i, update in enumerate(client_updates):
@@ -767,8 +932,10 @@ def main():
                 
                 if epsilons:
                     avg_eps = sum(epsilons) / len(epsilons)
-                    print(f"\n  === Privacy Analysis (Opacus DP-SGD) ===")
-                    print(f"  Current ε: {avg_eps:.4f}")
+                    max_eps = max(epsilons)  # Report worst-case for safety
+                    
+                    print(f"\n  === Privacy Analysis (Opacus DP-SGD A-only) ===")
+                    print(f"  Current ε (avg): {avg_eps:.4f}, ε (max): {max_eps:.4f}")
                     print(f"  Privacy Budget: ε≤{config['privacy'].get('epsilon', 8.0)}")
                     print(f"  δ: {config['privacy'].get('delta', 1e-5)}")
                     
@@ -776,8 +943,13 @@ def main():
                     sample_analysis = privacy_analyses[0]
                     print(f"  Noise multiplier (σ): {sample_analysis.get('noise_multiplier', 'N/A')}")
                     print(f"  Max gradient norm (C): {sample_analysis.get('max_grad_norm', 'N/A')}")
-                    print(f"  Method: {sample_analysis.get('method', 'Opacus DP-SGD')}")
-                    print(f"  Note: DP applied during training to LoRA and classifier parameters")
+                    print(f"  Batch size: {sample_analysis.get('batch_size', 'N/A')}")
+                    print(f"  Sample rate: {sample_analysis.get('sample_rate', 'N/A'):.4f}" if sample_analysis.get('sample_rate') else "  Sample rate: N/A")
+                    print(f"  Method: {sample_analysis.get('method', 'Opacus DP-SGD (A-only)')}")
+                    print(f"  Protection: LoRA-A matrices only (shared parameters)")
+                    print(f"  Non-DP: LoRA-B + classifier (local personalized parameters)")
+                    print(f"  Note: Sample rate shown is approx (batch_size/dataset_size);")
+                    print(f"        exact value is managed by Opacus accountant")
                 else:
                     print(f"\n  === Privacy Analysis ===")
                     print(f"  Privacy tracking unavailable - check Opacus installation")
