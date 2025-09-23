@@ -243,14 +243,23 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 print(f"Client {self.client_id}: Model already wrapped with GradSampleModule")
             else:
                 # First time: wrap model and A-optimizer with PrivacyEngine
+                # IMPORTANT: Only pass dp_optimizer (A params) to make_private
+                # This ensures grad_sample is only added to A parameters
                 self.model, self.dp_optimizer, dataloader = self.privacy_engine.make_private(
                     module=self.model,
-                    optimizer=self.dp_optimizer,  # Only A parameters
+                    optimizer=self.dp_optimizer,  # Only A parameters get grad_sample
                     data_loader=dataloader,
                     noise_multiplier=noise_multiplier,
                     max_grad_norm=max_grad_norm,
+                    poisson_sampling=False,  # Use fixed batch sampling
                 )
                 self.privacy_engine_attached = True
+                
+                # Mark B+classifier parameters to skip grad_sample computation
+                for p in self.local_params:
+                    if not hasattr(p, 'requires_grad_sample'):
+                        p.requires_grad = True  # Ensure they still get gradients
+                
                 print(f"Client {self.client_id}: PrivacyEngine attached for A-only with σ={noise_multiplier}, C={max_grad_norm}")
         
         total_loss = 0.0
@@ -286,17 +295,11 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     target_for_loss = target
                     target_for_acc = target
                 
-                # DP training with A-only noise (simplified approach for Opacus compatibility)
+                # DP training with A-only noise
                 if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
                     # Clear gradients for both optimizers (required by Opacus)
                     self.dp_optimizer.zero_grad()
                     self.local_optimizer.zero_grad()
-                    
-                    # Enable all parameters
-                    for p in self.A_params:
-                        p.requires_grad = True
-                    for p in self.local_params:
-                        p.requires_grad = True
                     
                     # Forward pass (AMP disabled for DP)
                     with torch.amp.autocast('cuda', enabled=False):
@@ -307,17 +310,26 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     else:
                         loss = F.cross_entropy(output, target_for_loss)
                     
-                    # Backward pass
+                    # Backward pass - computes gradients for all parameters
                     loss.backward()
                     
-                    # Step A optimizer (with DP noise via Opacus)
+                    # Step A optimizer (with DP noise via Opacus on A params only)
                     self.dp_optimizer.step()
                     
-                    # Step B+classifier optimizer (without DP noise)
+                    # Step B+classifier optimizer (standard SGD with momentum)
+                    # Opacus doesn't track these params, so this is safe
                     self.local_optimizer.step()
                     
-                    # Clear grad_sample attributes to prevent memory issues
-                    safe_clear_grad_sample(self.model)
+                    # Clear any grad_sample attributes to prevent memory issues
+                    # Only A params should have them from Opacus
+                    for p in self.A_params:
+                        if hasattr(p, 'grad_sample'):
+                            delattr(p, 'grad_sample')
+                    
+                    # Also check B params just in case (shouldn't have grad_sample)
+                    for p in self.local_params:
+                        if hasattr(p, 'grad_sample'):
+                            delattr(p, 'grad_sample')
                     
                 else:
                     # Standard single-optimizer training
