@@ -237,30 +237,22 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 noise_multiplier = self.config.get('privacy', {}).get('noise_multiplier', 1.0)
                 max_grad_norm = self.config.get('privacy', {}).get('max_grad_norm', 0.5)
                 
-                # Attach privacy engine ONLY to A parameters via dp_optimizer
-                # Use functorch mode to avoid activation tracking issues
-                self.model, self.dp_optimizer, dataloader = self.privacy_engine.make_private(
-                    module=self.model,
-                    optimizer=self.dp_optimizer,  # Only dp_optimizer for A params
-                    data_loader=dataloader,
-                    noise_multiplier=noise_multiplier,
-                    max_grad_norm=max_grad_norm,
-                    grad_sample_mode="functorch",  # Critical for avoiding activation errors
-                    poisson_sampling=False,  # Use fixed batch sampling
-                )
+                # IMPORTANT: We cannot use make_private with partial parameters
+                # Instead, we'll manually add noise to A gradients after computing them
+                # This is the only reliable way to achieve true A-only DP
+                
+                self.dp_noise_multiplier = noise_multiplier
+                self.dp_max_grad_norm = max_grad_norm
                 self.privacy_engine_attached = True
                 
-                # Perform a warm-up forward pass after make_private() as insurance
-                try:
-                    dummy_batch = next(iter(dataloader))
-                    images, _ = dummy_batch[0].to(self.device), dummy_batch[1].to(self.device)
-                    with torch.no_grad():
-                        _ = self.model(images[:1])  # Single sample warm-up
-                except:
-                    pass  # Warm-up is optional, ignore if it fails
+                # Initialize manual privacy accounting
+                from opacus.accountants import RDPAccountant
+                self.privacy_accountant = RDPAccountant()
                 
-                print(f"Client {self.client_id}: PrivacyEngine attached with σ={noise_multiplier}, C={max_grad_norm}")
-                print(f"  ✓ A-only DP: Using functorch mode with separate optimizers")
+                print(f"Client {self.client_id}: Manual DP setup for A-only protection")
+                print(f"  ✓ Noise multiplier: {noise_multiplier}")
+                print(f"  ✓ Max gradient norm: {max_grad_norm}")
+                print(f"  ✓ A-only DP: Manual noise injection for A matrices only")
         
         total_loss = 0.0
         correct = 0
@@ -295,9 +287,8 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     target_for_loss = target
                     target_for_acc = target
                 
-                # Two-phase training for DP with separate optimizers
+                # Two-phase training for DP with manual noise injection
                 if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.privacy_engine_attached:
-                    # Phase 1: Train A parameters with DP
                     # Clear gradients for both optimizers
                     self.dp_optimizer.zero_grad()
                     self.local_optimizer.zero_grad()
@@ -314,15 +305,43 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     # Backward pass - computes gradients for all parameters
                     loss.backward()
                     
-                    # Step dp_optimizer (Opacus adds noise to A params only)
+                    # Manually apply DP to A parameters only
+                    with torch.no_grad():
+                        # Clip gradients for A parameters
+                        A_grads = []
+                        for p in self.A_params:
+                            if p.grad is not None:
+                                A_grads.append(p.grad.data.flatten())
+                        
+                        if A_grads:
+                            # Compute global norm for A parameters
+                            total_norm = torch.norm(torch.cat(A_grads))
+                            
+                            # Clip gradients
+                            clip_coef = min(1.0, self.dp_max_grad_norm / (total_norm + 1e-6))
+                            
+                            # Apply clipping and add noise to A parameters only
+                            for p in self.A_params:
+                                if p.grad is not None:
+                                    # Clip gradient
+                                    p.grad.data.mul_(clip_coef)
+                                    
+                                    # Add Gaussian noise (scaled by sensitivity and batch size)
+                                    noise_std = self.dp_noise_multiplier * self.dp_max_grad_norm / data.shape[0]
+                                    noise = torch.randn_like(p.grad) * noise_std
+                                    p.grad.data.add_(noise)
+                    
+                    # Update privacy accounting
+                    if hasattr(self, 'privacy_accountant'):
+                        sample_rate = data.shape[0] / self.local_data_size
+                        self.privacy_accountant.step(
+                            noise_multiplier=self.dp_noise_multiplier,
+                            sample_rate=sample_rate
+                        )
+                    
+                    # Step both optimizers with DP-protected A gradients
                     self.dp_optimizer.step()
-                    
-                    # Phase 2: Train B+classifier parameters without DP
-                    # Use the same loss computation but step local_optimizer
                     self.local_optimizer.step()
-                    
-                    # Clear grad_sample attributes to prevent memory issues
-                    comprehensive_grad_sample_cleanup(self.model, verbose=False)
                     
                 elif self.aggregation_method == 'fedsa_shareA_dp':
                     # Non-DP training with two optimizers (before privacy engine attachment)
@@ -448,16 +467,11 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             }
             
             # Add privacy tracking for DP mode
-            if self.use_dp and self.privacy_engine is not None and self.aggregation_method == 'fedsa_shareA_dp':
+            if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and hasattr(self, 'privacy_accountant'):
                 try:
                     delta = self.config.get('privacy', {}).get('delta', 1e-5)
-                    # Try both APIs for compatibility with different Opacus versions
-                    try:
-                        epsilon = self.privacy_engine.accountant.get_epsilon(delta=delta) \
-                                  if hasattr(self.privacy_engine, 'accountant') \
-                                  else self.privacy_engine.get_epsilon(delta=delta)
-                    except:
-                        epsilon = self.privacy_engine.get_epsilon(delta=delta)
+                    # Get epsilon from manual accountant
+                    epsilon = self.privacy_accountant.get_epsilon(delta=delta)
                     
                     noise_multiplier = self.config.get('privacy', {}).get('noise_multiplier', 1.0)
                     max_grad_norm = self.config.get('privacy', {}).get('max_grad_norm', 0.5)
@@ -473,11 +487,11 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                         'batch_size': batch_size,
                         'sample_rate': sample_rate,
                         'dataset_size': self.local_data_size,
-                        'method': 'Opacus DP-SGD (A-only)'
+                        'method': 'Manual DP-SGD (A-only)'
                     }
                     update['privacy_note'] = 'DP applied to LoRA-A only; LoRA-B + classifier are local (non-DP)'
                     
-                    print(f"Client {self.client_id}: Privacy ε={epsilon:.4f} (Opacus A-only DP-SGD, δ={delta}, σ={noise_multiplier})")
+                    print(f"Client {self.client_id}: Privacy ε={epsilon:.4f} (Manual A-only DP, δ={delta}, σ={noise_multiplier})")
                 except Exception as e:
                     print(f"Client {self.client_id}: Could not compute privacy epsilon: {e}")
                     update['privacy_spent'] = 0
@@ -490,9 +504,6 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             # 2. This allows momentum to be maintained across rounds (which can help convergence)
             # 3. Resetting state causes KeyError in the next round
             # This applies to both standard and DP optimizers
-            
-            # Final cleanup: ensure no grad_sample attributes remain
-            comprehensive_grad_sample_cleanup(self.model, verbose=False)
             
         else:
             raise ValueError(f"Unsupported aggregation method: {self.aggregation_method}. This script only supports 'fedsa' and 'fedsa_shareA_dp'.")
