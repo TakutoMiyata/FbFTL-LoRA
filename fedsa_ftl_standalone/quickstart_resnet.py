@@ -226,41 +226,41 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         self.model.train()
         self.local_data_size = len(dataloader.dataset)
         
-        # Handle DP setup for A-only optimization
+        # Handle DP setup
         if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.privacy_engine is not None:
-            try:
-                from opacus.grad_sample import GradSampleModule
-            except ImportError:
-                GradSampleModule = None
-            
-            noise_multiplier = self.config.get('privacy', {}).get('noise_multiplier', 1.0)
-            max_grad_norm = self.config.get('privacy', {}).get('max_grad_norm', 0.5)
-            
-            # Check if model is already wrapped
-            if GradSampleModule and isinstance(self.model, GradSampleModule):
-                # Already wrapped, just update dataloader with DP sampling
-                # Note: Opacus might not support re-wrapping, so we keep existing setup
-                print(f"Client {self.client_id}: Model already wrapped with GradSampleModule")
-            else:
-                # First time: wrap model and A-optimizer with PrivacyEngine
-                # IMPORTANT: Only pass dp_optimizer (A params) to make_private
-                # This ensures grad_sample is only added to A parameters
+            if not self.privacy_engine_attached:
+                try:
+                    from opacus.grad_sample import GradSampleModule
+                except ImportError:
+                    GradSampleModule = None
+                
+                noise_multiplier = self.config.get('privacy', {}).get('noise_multiplier', 1.0)
+                max_grad_norm = self.config.get('privacy', {}).get('max_grad_norm', 0.5)
+                
+                # Attach privacy engine ONLY to A parameters via dp_optimizer
+                # Use functorch mode to avoid activation tracking issues
                 self.model, self.dp_optimizer, dataloader = self.privacy_engine.make_private(
                     module=self.model,
-                    optimizer=self.dp_optimizer,  # Only A parameters get grad_sample
+                    optimizer=self.dp_optimizer,  # Only dp_optimizer for A params
                     data_loader=dataloader,
                     noise_multiplier=noise_multiplier,
                     max_grad_norm=max_grad_norm,
+                    grad_sample_mode="functorch",  # Critical for avoiding activation errors
                     poisson_sampling=False,  # Use fixed batch sampling
                 )
                 self.privacy_engine_attached = True
                 
-                # Mark B+classifier parameters to skip grad_sample computation
-                for p in self.local_params:
-                    if not hasattr(p, 'requires_grad_sample'):
-                        p.requires_grad = True  # Ensure they still get gradients
+                # Perform a warm-up forward pass after make_private() as insurance
+                try:
+                    dummy_batch = next(iter(dataloader))
+                    images, _ = dummy_batch[0].to(self.device), dummy_batch[1].to(self.device)
+                    with torch.no_grad():
+                        _ = self.model(images[:1])  # Single sample warm-up
+                except:
+                    pass  # Warm-up is optional, ignore if it fails
                 
-                print(f"Client {self.client_id}: PrivacyEngine attached for A-only with σ={noise_multiplier}, C={max_grad_norm}")
+                print(f"Client {self.client_id}: PrivacyEngine attached with σ={noise_multiplier}, C={max_grad_norm}")
+                print(f"  ✓ A-only DP: Using functorch mode with separate optimizers")
         
         total_loss = 0.0
         correct = 0
@@ -295,9 +295,10 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     target_for_loss = target
                     target_for_acc = target
                 
-                # DP training with A-only noise
-                if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
-                    # Clear gradients for both optimizers (required by Opacus)
+                # Two-phase training for DP with separate optimizers
+                if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.privacy_engine_attached:
+                    # Phase 1: Train A parameters with DP
+                    # Clear gradients for both optimizers
                     self.dp_optimizer.zero_grad()
                     self.local_optimizer.zero_grad()
                     
@@ -313,26 +314,51 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     # Backward pass - computes gradients for all parameters
                     loss.backward()
                     
-                    # Step A optimizer (with DP noise via Opacus on A params only)
+                    # Step dp_optimizer (Opacus adds noise to A params only)
                     self.dp_optimizer.step()
                     
-                    # Step B+classifier optimizer (standard SGD with momentum)
-                    # Opacus doesn't track these params, so this is safe
+                    # Phase 2: Train B+classifier parameters without DP
+                    # Use the same loss computation but step local_optimizer
                     self.local_optimizer.step()
                     
-                    # Clear any grad_sample attributes to prevent memory issues
-                    # Only A params should have them from Opacus
-                    for p in self.A_params:
-                        if hasattr(p, 'grad_sample'):
-                            delattr(p, 'grad_sample')
+                    # Clear grad_sample attributes to prevent memory issues
+                    comprehensive_grad_sample_cleanup(self.model, verbose=False)
                     
-                    # Also check B params just in case (shouldn't have grad_sample)
-                    for p in self.local_params:
-                        if hasattr(p, 'grad_sample'):
-                            delattr(p, 'grad_sample')
+                elif self.aggregation_method == 'fedsa_shareA_dp':
+                    # Non-DP training with two optimizers (before privacy engine attachment)
+                    # Clear gradients for both optimizers
+                    if hasattr(self, 'dp_optimizer'):
+                        self.dp_optimizer.zero_grad()
+                    if hasattr(self, 'local_optimizer'):
+                        self.local_optimizer.zero_grad()
+                    
+                    # Use autocast only if AMP is enabled
+                    with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
+                        output = self.model(data)
+                    
+                    if len(target.shape) > 1:  # Mixup/CutMix loss
+                        loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
+                    else:
+                        loss = F.cross_entropy(output, target_for_loss)
+                    
+                    if scaler is not None:
+                        # Use AMP scaler
+                        scaler.scale(loss).backward()
+                        if hasattr(self, 'dp_optimizer'):
+                            scaler.step(self.dp_optimizer)
+                        if hasattr(self, 'local_optimizer'):
+                            scaler.step(self.local_optimizer)
+                        scaler.update()
+                    else:
+                        # Standard training
+                        loss.backward()
+                        if hasattr(self, 'dp_optimizer'):
+                            self.dp_optimizer.step()
+                        if hasattr(self, 'local_optimizer'):
+                            self.local_optimizer.step()
                     
                 else:
-                    # Standard single-optimizer training
+                    # Standard single-optimizer training (fedsa mode)
                     # Use autocast only if AMP is enabled
                     with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
                         output = self.model(data)
