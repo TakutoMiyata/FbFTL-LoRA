@@ -289,62 +289,61 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 # Two-phase training for DP A-only mode
                 if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.dp_optimizer is not None:
                     try:
-                        # === Phase A: DP-SGD on A parameters only ===
+                        # Single forward pass for both phases (required for Opacus compatibility)
                         # Clear gradients efficiently
                         self.model.zero_grad(set_to_none=True)
                         
-                        # Freeze B+classifier, enable A
-                        for p in self.local_params:
-                            p.requires_grad = False
+                        # Enable all parameters for forward pass
                         for p in self.A_params:
                             p.requires_grad = True
-                        
-                        # Forward pass for A (AMP always disabled for DP)
-                        with torch.amp.autocast('cuda', enabled=False):
-                            output_A = self.model(data)
-                        
-                        if len(target.shape) > 1:  # Mixup/CutMix loss
-                            loss_A = -(target_for_loss * F.log_softmax(output_A, dim=1)).sum(dim=1).mean()
-                        else:
-                            loss_A = F.cross_entropy(output_A, target_for_loss)
-                        
-                        # Backward and step for A (with DP noise via Opacus)
-                        self.dp_optimizer.zero_grad(set_to_none=True)
-                        loss_A.backward()
-                        self.dp_optimizer.step()
-                        
-                        # Clear grad_sample after A phase to prevent contamination
-                        safe_clear_grad_sample(self.model)
-                        
-                        # === Phase B: Non-DP personalization on B+classifier ===
-                        # Clear gradients efficiently
-                        self.model.zero_grad(set_to_none=True)
-                        
-                        # Freeze A, enable B+classifier
-                        for p in self.A_params:
-                            p.requires_grad = False
                         for p in self.local_params:
                             p.requires_grad = True
                         
-                        # Forward pass for B+classifier (AMP disabled for consistency)
+                        # Single forward pass (AMP always disabled for DP)
                         with torch.amp.autocast('cuda', enabled=False):
                             output = self.model(data)
                         
                         if len(target.shape) > 1:  # Mixup/CutMix loss
-                            loss_B = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
+                            loss_total = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
                         else:
-                            loss_B = F.cross_entropy(output, target_for_loss)
+                            loss_total = F.cross_entropy(output, target_for_loss)
                         
-                        # Backward and step for B+classifier (no DP)
+                        # === Phase A: DP-SGD on A parameters only ===
+                        # Freeze B+classifier for A-only gradients
+                        for p in self.local_params:
+                            p.requires_grad = False
+                        for p in self.A_params:
+                            p.requires_grad = True
+                        
+                        # Compute gradients for A
+                        self.dp_optimizer.zero_grad(set_to_none=True)
+                        loss_total.backward(retain_graph=True)  # Keep graph for Phase B
+                        self.dp_optimizer.step()
+                        
+                        # Clear grad_sample after A phase
+                        safe_clear_grad_sample(self.model)
+                        
+                        # === Phase B: Non-DP personalization on B+classifier ===
+                        # Clear A gradients and freeze A parameters
+                        for p in self.A_params:
+                            if p.grad is not None:
+                                p.grad = None
+                            p.requires_grad = False
+                        
+                        # Enable B+classifier
+                        for p in self.local_params:
+                            p.requires_grad = True
+                        
+                        # Compute gradients for B+classifier (reuse loss from same forward)
                         self.local_optimizer.zero_grad(set_to_none=True)
-                        loss_B.backward()
+                        loss_total.backward()  # No retain_graph needed
                         self.local_optimizer.step()
                         
                         # Clear grad_sample from Opacus (important for memory)
                         safe_clear_grad_sample(self.model)
                         
-                        # Combined loss for logging
-                        loss = (loss_A + loss_B) / 2
+                        # Use single loss for logging
+                        loss = loss_total
                         
                     finally:
                         # Always re-enable all gradients for safety (even on exception)
