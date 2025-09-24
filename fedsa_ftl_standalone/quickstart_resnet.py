@@ -305,35 +305,38 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     # Backward pass - computes gradients for all parameters
                     loss.backward()
                     
-                    # Manually apply DP to A parameters only
+                    # Manually apply DP to A parameters only (optimized)
                     with torch.no_grad():
-                        # Clip gradients for A parameters
-                        A_grads = []
+                        # Compute gradient norm efficiently without torch.cat
+                        total_norm_sq = None
+                        A_params_with_grad = []
+                        
                         for p in self.A_params:
                             if p.grad is not None:
-                                A_grads.append(p.grad.data.flatten())
+                                A_params_with_grad.append(p)
+                                # Accumulate squared norms on GPU (avoid CPU-GPU sync)
+                                g2 = torch.sum(p.grad.data ** 2)
+                                total_norm_sq = g2 if total_norm_sq is None else (total_norm_sq + g2)
                         
-                        if A_grads:
-                            # Compute global norm for A parameters
-                            total_norm = torch.norm(torch.cat(A_grads))
-                            
-                            # Clip gradients
+                        if A_params_with_grad:
+                            total_norm = torch.sqrt(total_norm_sq + 1e-12)
                             clip_coef = min(1.0, self.dp_max_grad_norm / (total_norm + 1e-6))
                             
-                            # Apply clipping and add noise to A parameters only
-                            for p in self.A_params:
-                                if p.grad is not None:
-                                    # Clip gradient
-                                    p.grad.data.mul_(clip_coef)
-                                    
-                                    # Add Gaussian noise (scaled by sensitivity and batch size)
-                                    noise_std = self.dp_noise_multiplier * self.dp_max_grad_norm / data.shape[0]
-                                    noise = torch.randn_like(p.grad) * noise_std
-                                    p.grad.data.add_(noise)
+                            # Pre-compute noise parameters
+                            noise_std = self.dp_noise_multiplier * self.dp_max_grad_norm / data.shape[0]
+                            
+                            # Apply clipping and noise in single loop
+                            for p in A_params_with_grad:
+                                # Clip gradient
+                                p.grad.data.mul_(clip_coef)
+                                
+                                # Add Gaussian noise (optimized)
+                                noise = torch.randn_like(p.grad) * noise_std
+                                p.grad.data.add_(noise)
                     
-                    # Update privacy accounting
+                    # Update privacy accounting per batch (lightweight operation)
                     if hasattr(self, 'privacy_accountant'):
-                        sample_rate = data.shape[0] / self.local_data_size
+                        sample_rate = data.shape[0] / self.local_data_size if self.local_data_size > 0 else 0.0
                         self.privacy_accountant.step(
                             noise_multiplier=self.dp_noise_multiplier,
                             sample_rate=sample_rate
@@ -405,12 +408,13 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 correct += pred.eq(target_for_acc.view_as(pred)).sum().item()
                 total += target_for_acc.size(0)
                 
-                # Update progress bar with current metrics
-                pbar.set_postfix({
-                    'loss': f'{loss.item():.4f}',
-                    'avg_loss': f'{epoch_loss/(batch_idx+1):.4f}',
-                    'acc': f'{100.*correct/total:.2f}%'
-                })
+                # Update progress bar every 10 batches for performance
+                if batch_idx % 10 == 0 or batch_idx == len(dataloader) - 1:
+                    pbar.set_postfix({
+                        'loss': f'{loss.item():.4f}',
+                        'avg_loss': f'{epoch_loss/(batch_idx+1):.4f}',
+                        'acc': f'{100.*correct/total:.2f}%'
+                    })
             
             total_loss += epoch_loss
         
