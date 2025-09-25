@@ -269,13 +269,16 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             
             # Timing statistics for this epoch
             timing_stats = {
+                'data_loading': 0.0,  # DataLoader iteration time
                 'data_transfer': 0.0,
                 'forward_pass': 0.0,
                 'loss_computation': 0.0,
                 'backward_pass': 0.0,
                 'dp_processing': 0.0,
                 'optimizer_step': 0.0,
-                'tqdm_update': 0.0
+                'metrics_calc': 0.0,  # Accuracy calculation
+                'tqdm_update': 0.0,
+                'other': 0.0  # Everything else
             }
             
             # Add progress bar for batches
@@ -284,7 +287,12 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                        leave=False,
                        unit="batch")
             
+            prev_batch_end = time.time()
             for batch_idx, (data, target) in enumerate(pbar):
+                # Measure the time spent waiting for the next batch (data loading from disk/CPU)
+                data_wait_time = time.time() - prev_batch_end
+                timing_stats['data_loading'] += data_wait_time
+                
                 batch_start_time = time.time()
                 
                 # Data transfer timing
@@ -380,20 +388,29 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 elif self.aggregation_method == 'fedsa_shareA_dp':
                     # Non-DP training with two optimizers (before privacy engine attachment)
                     # Clear gradients for both optimizers
+                    optimizer_start = time.time()
                     if hasattr(self, 'dp_optimizer'):
                         self.dp_optimizer.zero_grad()
                     if hasattr(self, 'local_optimizer'):
                         self.local_optimizer.zero_grad()
+                    timing_stats['optimizer_step'] += time.time() - optimizer_start
                     
-                    # Use autocast only if AMP is enabled
+                    # Forward pass timing
+                    forward_start = time.time()
                     with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
                         output = self.model(data)
+                    timing_stats['forward_pass'] += time.time() - forward_start
                     
+                    # Loss computation timing
+                    loss_start = time.time()
                     if len(target.shape) > 1:  # Mixup/CutMix loss
                         loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
                     else:
                         loss = F.cross_entropy(output, target_for_loss)
+                    timing_stats['loss_computation'] += time.time() - loss_start
                     
+                    # Backward and optimizer step timing
+                    backward_start = time.time()
                     if scaler is not None:
                         # Use AMP scaler
                         scaler.scale(loss).backward()
@@ -409,6 +426,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                             self.dp_optimizer.step()
                         if hasattr(self, 'local_optimizer'):
                             self.local_optimizer.step()
+                    timing_stats['backward_pass'] += time.time() - backward_start
                     
                 else:
                     # Standard single-optimizer training (fedsa mode)
@@ -444,10 +462,12 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     timing_stats['backward_pass'] += time.time() - step_start
                 
                 # Track metrics
+                metrics_start = time.time()
                 epoch_loss += loss.item()
                 pred = output.argmax(dim=1, keepdim=True)
                 correct += pred.eq(target_for_acc.view_as(pred)).sum().item()
                 total += target_for_acc.size(0)
+                timing_stats['metrics_calc'] += time.time() - metrics_start
                 
                 # Update progress bar every 10 batches for performance
                 tqdm_start = time.time()
@@ -458,6 +478,9 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                         'acc': f'{100.*correct/total:.2f}%'
                     })
                 timing_stats['tqdm_update'] += time.time() - tqdm_start
+                
+                # Record end of this batch for next iteration's data loading measurement
+                prev_batch_end = time.time()
             
             total_loss += epoch_loss
             
@@ -465,17 +488,33 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             epoch_total_time = time.time() - epoch_start_time
             num_batches = len(dataloader)
             
+            # Calculate measured vs unmeasured time
+            measured_time = sum(timing_stats.values())
+            unmeasured_time = epoch_total_time - measured_time
+            
             print(f"\n📊 Client {self.client_id} - Epoch {epoch+1} Timing (total: {epoch_total_time:.2f}s, {num_batches} batches):")
+            print(f"  Data Loading:    {timing_stats['data_loading']:.3f}s ({timing_stats['data_loading']/epoch_total_time*100:.1f}%)")
             print(f"  Data Transfer:   {timing_stats['data_transfer']:.3f}s ({timing_stats['data_transfer']/epoch_total_time*100:.1f}%)")
             print(f"  Forward Pass:    {timing_stats['forward_pass']:.3f}s ({timing_stats['forward_pass']/epoch_total_time*100:.1f}%)")
             print(f"  Loss Computation:{timing_stats['loss_computation']:.3f}s ({timing_stats['loss_computation']/epoch_total_time*100:.1f}%)")
             print(f"  Backward Pass:   {timing_stats['backward_pass']:.3f}s ({timing_stats['backward_pass']/epoch_total_time*100:.1f}%)")
             print(f"  DP Processing:   {timing_stats['dp_processing']:.3f}s ({timing_stats['dp_processing']/epoch_total_time*100:.1f}%)")
             print(f"  Optimizer Step:  {timing_stats['optimizer_step']:.3f}s ({timing_stats['optimizer_step']/epoch_total_time*100:.1f}%)")
+            print(f"  Metrics Calc:    {timing_stats['metrics_calc']:.3f}s ({timing_stats['metrics_calc']/epoch_total_time*100:.1f}%)")
             print(f"  TQDM Updates:    {timing_stats['tqdm_update']:.3f}s ({timing_stats['tqdm_update']/epoch_total_time*100:.1f}%)")
+            if unmeasured_time/epoch_total_time > 0.1:  # More than 10% unmeasured
+                print(f"  ⚠️ UNMEASURED:    {unmeasured_time:.3f}s ({unmeasured_time/epoch_total_time*100:.1f}%) ← PROBLEM!")
+            else:
+                print(f"  Other:           {unmeasured_time:.3f}s ({unmeasured_time/epoch_total_time*100:.1f}%)")
             
             # Calculate per-batch averages
-            print(f"  Per-batch avg:   {epoch_total_time/num_batches:.3f}s")
+            print(f"\n  === Per-Batch Analysis ===")
+            print(f"  Total avg:       {epoch_total_time/num_batches:.3f}s per batch")
+            print(f"  Data Loading:    {timing_stats['data_loading']/num_batches:.3f}s per batch")
+            
+            if unmeasured_time/num_batches > 1.0:  # More than 1s per batch unmeasured
+                print(f"  ⚠️ Missing:       {unmeasured_time/num_batches:.3f}s per batch - CHECK DATA PIPELINE!")
+            
             if timing_stats['dp_processing'] > 0:
                 print(f"  DP overhead:     {timing_stats['dp_processing']/num_batches:.3f}s per batch")
         
