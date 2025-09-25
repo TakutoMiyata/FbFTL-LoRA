@@ -221,7 +221,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         # Initial cleanup: ensure model starts without any grad_sample artifacts
         comprehensive_grad_sample_cleanup(self.model, verbose=False)
     
-    def train(self, dataloader, training_config):
+    def train(self, dataloader, training_config, debug_timing=False):
         """Train the model with A-only DP-SGD and non-DP B+classifier"""
         self.model.train()
         self.local_data_size = len(dataloader.dataset)
@@ -295,6 +295,8 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 batch_start_time = time.time()
                 
                 # Data transfer timing
+                if debug_timing and torch.cuda.is_available():
+                    torch.cuda.synchronize()
                 data_start = time.time()
                 data, target = data.to(self.device), target.to(self.device)
                 
@@ -310,6 +312,8 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     target_for_loss = target
                     target_for_acc = target
                 
+                if debug_timing and torch.cuda.is_available():
+                    torch.cuda.synchronize()  # Wait for transfer to complete
                 timing_stats['data_transfer'] += time.time() - data_start
                 
                 # Two-phase training for DP with manual noise injection
@@ -321,12 +325,12 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     timing_stats['optimizer_step'] += time.time() - optimizer_start
                     
                     # Forward pass (AMP disabled for DP)
-                    if torch.cuda.is_available():
+                    if debug_timing and torch.cuda.is_available():
                         torch.cuda.synchronize()  # Ensure previous ops complete
                     forward_start = time.time()
                     with torch.amp.autocast('cuda', enabled=False):
                         output = self.model(data)
-                    if torch.cuda.is_available():
+                    if debug_timing and torch.cuda.is_available():
                         torch.cuda.synchronize()  # Wait for forward to complete
                     timing_stats['forward_pass'] += time.time() - forward_start
                     
@@ -339,11 +343,11 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     timing_stats['loss_computation'] += time.time() - loss_start
                     
                     # Backward pass - computes gradients for all parameters
-                    if torch.cuda.is_available():
+                    if debug_timing and torch.cuda.is_available():
                         torch.cuda.synchronize()
                     backward_start = time.time()
                     loss.backward()
-                    if torch.cuda.is_available():
+                    if debug_timing and torch.cuda.is_available():
                         torch.cuda.synchronize()
                     timing_stats['backward_pass'] += time.time() - backward_start
                     
@@ -512,39 +516,43 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             
             total_loss += epoch_loss
             
-            # Print detailed timing statistics for this epoch
+            # Print timing statistics if debugging
             epoch_total_time = time.time() - epoch_start_time
             num_batches = len(dataloader)
             
-            # Calculate measured vs unmeasured time
-            measured_time = sum(timing_stats.values())
-            unmeasured_time = epoch_total_time - measured_time
-            
-            print(f"\n📊 Client {self.client_id} - Epoch {epoch+1} Timing (total: {epoch_total_time:.2f}s, {num_batches} batches):")
-            print(f"  Data Loading:    {timing_stats['data_loading']:.3f}s ({timing_stats['data_loading']/epoch_total_time*100:.1f}%)")
-            print(f"  Data Transfer:   {timing_stats['data_transfer']:.3f}s ({timing_stats['data_transfer']/epoch_total_time*100:.1f}%)")
-            print(f"  Forward Pass:    {timing_stats['forward_pass']:.3f}s ({timing_stats['forward_pass']/epoch_total_time*100:.1f}%)")
-            print(f"  Loss Computation:{timing_stats['loss_computation']:.3f}s ({timing_stats['loss_computation']/epoch_total_time*100:.1f}%)")
-            print(f"  Backward Pass:   {timing_stats['backward_pass']:.3f}s ({timing_stats['backward_pass']/epoch_total_time*100:.1f}%)")
-            print(f"  DP Processing:   {timing_stats['dp_processing']:.3f}s ({timing_stats['dp_processing']/epoch_total_time*100:.1f}%)")
-            print(f"  Optimizer Step:  {timing_stats['optimizer_step']:.3f}s ({timing_stats['optimizer_step']/epoch_total_time*100:.1f}%)")
-            print(f"  Metrics Calc:    {timing_stats['metrics_calc']:.3f}s ({timing_stats['metrics_calc']/epoch_total_time*100:.1f}%)")
-            print(f"  TQDM Updates:    {timing_stats['tqdm_update']:.3f}s ({timing_stats['tqdm_update']/epoch_total_time*100:.1f}%)")
-            if unmeasured_time/epoch_total_time > 0.1:  # More than 10% unmeasured
-                print(f"  ⚠️ UNMEASURED:    {unmeasured_time:.3f}s ({unmeasured_time/epoch_total_time*100:.1f}%) ← PROBLEM!")
+            if debug_timing:
+                # Calculate measured vs unmeasured time
+                measured_time = sum(timing_stats.values())
+                unmeasured_time = epoch_total_time - measured_time
+                
+                print(f"\n📊 Client {self.client_id} - Epoch {epoch+1} Timing (total: {epoch_total_time:.2f}s, {num_batches} batches):")
+                print(f"  Data Loading:    {timing_stats['data_loading']:.3f}s ({timing_stats['data_loading']/epoch_total_time*100:.1f}%)")
+                print(f"  Data Transfer:   {timing_stats['data_transfer']:.3f}s ({timing_stats['data_transfer']/epoch_total_time*100:.1f}%)")
+                print(f"  Forward Pass:    {timing_stats['forward_pass']:.3f}s ({timing_stats['forward_pass']/epoch_total_time*100:.1f}%)")
+                print(f"  Loss Computation:{timing_stats['loss_computation']:.3f}s ({timing_stats['loss_computation']/epoch_total_time*100:.1f}%)")
+                print(f"  Backward Pass:   {timing_stats['backward_pass']:.3f}s ({timing_stats['backward_pass']/epoch_total_time*100:.1f}%)")
+                print(f"  DP Processing:   {timing_stats['dp_processing']:.3f}s ({timing_stats['dp_processing']/epoch_total_time*100:.1f}%)")
+                print(f"  Optimizer Step:  {timing_stats['optimizer_step']:.3f}s ({timing_stats['optimizer_step']/epoch_total_time*100:.1f}%)")
+                print(f"  Metrics Calc:    {timing_stats['metrics_calc']:.3f}s ({timing_stats['metrics_calc']/epoch_total_time*100:.1f}%)")
+                print(f"  TQDM Updates:    {timing_stats['tqdm_update']:.3f}s ({timing_stats['tqdm_update']/epoch_total_time*100:.1f}%)")
+                if unmeasured_time/epoch_total_time > 0.1:  # More than 10% unmeasured
+                    print(f"  ⚠️ UNMEASURED:    {unmeasured_time:.3f}s ({unmeasured_time/epoch_total_time*100:.1f}%) ← PROBLEM!")
+                else:
+                    print(f"  Other:           {unmeasured_time:.3f}s ({unmeasured_time/epoch_total_time*100:.1f}%)")
+                
+                # Calculate per-batch averages
+                print(f"\n  === Per-Batch Analysis ===")
+                print(f"  Total avg:       {epoch_total_time/num_batches:.3f}s per batch")
+                print(f"  Data Loading:    {timing_stats['data_loading']/num_batches:.3f}s per batch")
+                
+                if unmeasured_time/num_batches > 1.0:  # More than 1s per batch unmeasured
+                    print(f"  ⚠️ Missing:       {unmeasured_time/num_batches:.3f}s per batch - CHECK DATA PIPELINE!")
+                
+                if timing_stats['dp_processing'] > 0:
+                    print(f"  DP overhead:     {timing_stats['dp_processing']/num_batches:.3f}s per batch")
             else:
-                print(f"  Other:           {unmeasured_time:.3f}s ({unmeasured_time/epoch_total_time*100:.1f}%)")
-            
-            # Calculate per-batch averages
-            print(f"\n  === Per-Batch Analysis ===")
-            print(f"  Total avg:       {epoch_total_time/num_batches:.3f}s per batch")
-            print(f"  Data Loading:    {timing_stats['data_loading']/num_batches:.3f}s per batch")
-            
-            if unmeasured_time/num_batches > 1.0:  # More than 1s per batch unmeasured
-                print(f"  ⚠️ Missing:       {unmeasured_time/num_batches:.3f}s per batch - CHECK DATA PIPELINE!")
-            
-            if timing_stats['dp_processing'] > 0:
-                print(f"  DP overhead:     {timing_stats['dp_processing']/num_batches:.3f}s per batch")
+                # Normal mode: just print epoch summary
+                print(f"Client {self.client_id} - Epoch {epoch+1}: {epoch_total_time:.1f}s ({num_batches} batches, {epoch_total_time/num_batches:.2f}s/batch)")
         
         avg_loss = total_loss / (num_epochs * len(dataloader))
         accuracy = 100. * correct / total
