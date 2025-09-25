@@ -19,25 +19,6 @@ import os
 # Disable tqdm globally BEFORE importing
 os.environ['TQDM_DISABLE'] = '1'
 
-# Override tqdm to be a no-op
-class NoOpTqdm:
-    def __init__(self, iterable=None, *args, **kwargs):
-        self.iterable = iterable or []
-    def __iter__(self):
-        return iter(self.iterable)
-    def __enter__(self):
-        return self
-    def __exit__(self, *args):
-        pass
-    def set_postfix(self, *args, **kwargs):
-        pass
-    def update(self, *args, **kwargs):
-        pass
-
-# Monkey patch tqdm
-import sys
-sys.modules['tqdm'] = type(sys)('tqdm')
-sys.modules['tqdm'].tqdm = NoOpTqdm
 
 from tqdm import tqdm
 
