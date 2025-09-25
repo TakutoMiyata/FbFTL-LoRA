@@ -132,7 +132,8 @@ def plot_communication_cost(results, save_dir):
     if 'rounds' in results:
         rounds_data = results['rounds']
         rounds = [r['round'] for r in rounds_data]
-        comm_costs = [r['communication_cost_mb'] for r in rounds_data]
+        # Some result files may miss communication_cost_mb; default to 0
+        comm_costs = [r.get('communication_cost_mb', 0) for r in rounds_data]
         x_label = 'Round'
         title_prefix = 'Federated Learning'
     elif 'epochs' in results:
@@ -142,7 +143,13 @@ def plot_communication_cost(results, save_dir):
     else:
         print("No communication cost data available")
         return
-    cumulative_costs = np.cumsum(comm_costs)
+    # Convert to numpy array safely
+    comm_costs_array = np.array(comm_costs, dtype=float)
+    cumulative_costs = np.cumsum(comm_costs_array) if comm_costs_array.size > 0 else np.array([])
+
+    if len(rounds) == 0:
+        print("No rounds found; skipping communication plot")
+        return
     
     # Create subplots
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
@@ -162,7 +169,7 @@ def plot_communication_cost(results, save_dir):
     ax2.grid(True, alpha=0.3)
     
     # Add total cost annotation
-    total_cost = cumulative_costs[-1] if cumulative_costs else 0
+    total_cost = float(cumulative_costs[-1]) if cumulative_costs.size > 0 else 0.0
     ax2.annotate(f'Total: {total_cost:.2f} MB', 
                 xy=(rounds[-1], total_cost), 
                 xytext=(10, 10), 
@@ -414,6 +421,9 @@ def main():
     plt.style.use('seaborn-v0_8' if 'seaborn-v0_8' in plt.style.available else 'default')
     
     plots_to_generate = args.plots if 'all' not in args.plots else ['accuracy', 'communication', 'clients', 'dashboard']
+    # If user only cares about accuracy they can pass --plots accuracy; auto-detect minimal mode
+    if plots_to_generate == ['accuracy']:
+        print("Running in accuracy-only mode (fast).")
     
     print(f"Generating plots: {plots_to_generate}")
     print(f"Output directory: {output_dir}")
@@ -423,7 +433,10 @@ def main():
         plot_accuracy_curves(results, output_dir)
     
     if 'communication' in plots_to_generate:
-        plot_communication_cost(results, output_dir)
+        try:
+            plot_communication_cost(results, output_dir)
+        except Exception as e:
+            print(f"[WARN] Communication plot failed: {e}. Continue (accuracy-first mode).")
     
     if 'clients' in plots_to_generate:
         plot_client_performance(results, output_dir)

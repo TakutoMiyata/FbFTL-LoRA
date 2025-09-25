@@ -72,7 +72,7 @@ experiment:
 federated:
   aggregation_method: fedsa
   checkpoint_freq: 25
-  client_fraction: 1.0
+  client_fraction: 0.3
   num_clients: 10
   num_rounds: 100
   exclude_bn_from_agg: true
@@ -102,7 +102,7 @@ training:
   lr: 0.001  # Scaled with larger batch size (256)
   weight_decay: 0.01
   scheduler: cosine
-  warmup_epochs: 1
+  warmup_epochs: 0
   label_smoothing: 0.1
   gradient_clip: 1.0
   optimizer: sgd

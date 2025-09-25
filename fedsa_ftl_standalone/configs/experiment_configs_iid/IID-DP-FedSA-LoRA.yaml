@@ -22,6 +22,8 @@ data:
   model_type: imagenet
   num_clients: 10
   num_workers: 8
+  pin_memory: true
+  persistent_workers: true
   verbose: false
   augmentations:
     color_jitter:
@@ -70,7 +72,7 @@ experiment:
 federated:
   aggregation_method: fedsa_shareA_dp
   checkpoint_freq: 25
-  client_fraction: 1.0
+  client_fraction: 0.3
   num_clients: 10
   num_rounds: 100
   exclude_bn_from_agg: true
