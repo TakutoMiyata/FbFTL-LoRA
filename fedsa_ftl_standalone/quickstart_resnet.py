@@ -16,11 +16,42 @@ import json
 import time
 from datetime import datetime
 import os
-# Disable tqdm globally BEFORE importing
-os.environ['TQDM_DISABLE'] = '1'
+# Create NoOpTqdm class to completely disable progress bars
+class NoOpTqdm:
+    """No-operation replacement for tqdm to disable all progress bars"""
+    def __init__(self, iterable=None, desc=None, leave=None, unit=None, total=None, **kwargs):
+        self.iterable = iterable
+        self.desc = desc
+        self.n = 0
+        self.total = total if total is not None else (len(iterable) if hasattr(iterable, '__len__') else None)
+    
+    def __iter__(self):
+        if self.iterable is not None:
+            for item in self.iterable:
+                yield item
+                self.n += 1
+        return self
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, *args):
+        pass
+    
+    def set_description(self, desc):
+        pass
+    
+    def set_postfix(self, **kwargs):
+        pass
+    
+    def update(self, n=1):
+        self.n += n
+    
+    def close(self):
+        pass
 
-
-from tqdm import tqdm
+# Use NoOpTqdm instead of real tqdm to eliminate all progress bars
+tqdm = NoOpTqdm
 
 # Opacus for differential privacy
 try:
