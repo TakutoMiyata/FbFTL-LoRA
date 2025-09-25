@@ -265,6 +265,18 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         
         for epoch in range(num_epochs):
             epoch_loss = 0.0
+            epoch_start_time = time.time()
+            
+            # Timing statistics for this epoch
+            timing_stats = {
+                'data_transfer': 0.0,
+                'forward_pass': 0.0,
+                'loss_computation': 0.0,
+                'backward_pass': 0.0,
+                'dp_processing': 0.0,
+                'optimizer_step': 0.0,
+                'tqdm_update': 0.0
+            }
             
             # Add progress bar for batches
             pbar = tqdm(dataloader, 
@@ -273,6 +285,10 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                        unit="batch")
             
             for batch_idx, (data, target) in enumerate(pbar):
+                batch_start_time = time.time()
+                
+                # Data transfer timing
+                data_start = time.time()
                 data, target = data.to(self.device), target.to(self.device)
                 
                 # Convert input to half precision if model is half precision
@@ -287,25 +303,37 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     target_for_loss = target
                     target_for_acc = target
                 
+                timing_stats['data_transfer'] += time.time() - data_start
+                
                 # Two-phase training for DP with manual noise injection
                 if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.privacy_engine_attached:
                     # Clear gradients for both optimizers
+                    optimizer_start = time.time()
                     self.dp_optimizer.zero_grad()
                     self.local_optimizer.zero_grad()
+                    timing_stats['optimizer_step'] += time.time() - optimizer_start
                     
                     # Forward pass (AMP disabled for DP)
+                    forward_start = time.time()
                     with torch.amp.autocast('cuda', enabled=False):
                         output = self.model(data)
+                    timing_stats['forward_pass'] += time.time() - forward_start
                     
+                    # Loss computation timing
+                    loss_start = time.time()
                     if len(target.shape) > 1:  # Mixup/CutMix loss
                         loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
                     else:
                         loss = F.cross_entropy(output, target_for_loss)
+                    timing_stats['loss_computation'] += time.time() - loss_start
                     
                     # Backward pass - computes gradients for all parameters
+                    backward_start = time.time()
                     loss.backward()
+                    timing_stats['backward_pass'] += time.time() - backward_start
                     
                     # Manually apply DP to A parameters only (optimized)
+                    dp_start = time.time()
                     with torch.no_grad():
                         # Compute gradient norm efficiently without torch.cat
                         total_norm_sq = None
@@ -341,10 +369,13 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                             noise_multiplier=self.dp_noise_multiplier,
                             sample_rate=sample_rate
                         )
+                    timing_stats['dp_processing'] += time.time() - dp_start
                     
                     # Step both optimizers with DP-protected A gradients
+                    step_start = time.time()
                     self.dp_optimizer.step()
                     self.local_optimizer.step()
+                    timing_stats['optimizer_step'] += time.time() - step_start
                     
                 elif self.aggregation_method == 'fedsa_shareA_dp':
                     # Non-DP training with two optimizers (before privacy engine attachment)
@@ -381,17 +412,26 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     
                 else:
                     # Standard single-optimizer training (fedsa mode)
-                    # Use autocast only if AMP is enabled
+                    optimizer_start = time.time()
+                    self.optimizer.zero_grad()
+                    timing_stats['optimizer_step'] += time.time() - optimizer_start
+                    
+                    # Forward pass timing
+                    forward_start = time.time()
                     with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
                         output = self.model(data)
+                    timing_stats['forward_pass'] += time.time() - forward_start
                     
+                    # Loss computation timing
+                    loss_start = time.time()
                     if len(target.shape) > 1:  # Mixup/CutMix loss
                         loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
                     else:
                         loss = F.cross_entropy(output, target_for_loss)
+                    timing_stats['loss_computation'] += time.time() - loss_start
                     
-                    self.optimizer.zero_grad()
-                    
+                    # Backward and optimizer step timing
+                    step_start = time.time()
                     if scaler is not None:
                         # Use AMP scaler (only when DP is disabled)
                         scaler.scale(loss).backward()
@@ -401,6 +441,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                         # Standard training
                         loss.backward()
                         self.optimizer.step()
+                    timing_stats['backward_pass'] += time.time() - step_start
                 
                 # Track metrics
                 epoch_loss += loss.item()
@@ -409,14 +450,34 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 total += target_for_acc.size(0)
                 
                 # Update progress bar every 10 batches for performance
+                tqdm_start = time.time()
                 if batch_idx % 10 == 0 or batch_idx == len(dataloader) - 1:
                     pbar.set_postfix({
                         'loss': f'{loss.item():.4f}',
                         'avg_loss': f'{epoch_loss/(batch_idx+1):.4f}',
                         'acc': f'{100.*correct/total:.2f}%'
                     })
+                timing_stats['tqdm_update'] += time.time() - tqdm_start
             
             total_loss += epoch_loss
+            
+            # Print detailed timing statistics for this epoch
+            epoch_total_time = time.time() - epoch_start_time
+            num_batches = len(dataloader)
+            
+            print(f"\n📊 Client {self.client_id} - Epoch {epoch+1} Timing (total: {epoch_total_time:.2f}s, {num_batches} batches):")
+            print(f"  Data Transfer:   {timing_stats['data_transfer']:.3f}s ({timing_stats['data_transfer']/epoch_total_time*100:.1f}%)")
+            print(f"  Forward Pass:    {timing_stats['forward_pass']:.3f}s ({timing_stats['forward_pass']/epoch_total_time*100:.1f}%)")
+            print(f"  Loss Computation:{timing_stats['loss_computation']:.3f}s ({timing_stats['loss_computation']/epoch_total_time*100:.1f}%)")
+            print(f"  Backward Pass:   {timing_stats['backward_pass']:.3f}s ({timing_stats['backward_pass']/epoch_total_time*100:.1f}%)")
+            print(f"  DP Processing:   {timing_stats['dp_processing']:.3f}s ({timing_stats['dp_processing']/epoch_total_time*100:.1f}%)")
+            print(f"  Optimizer Step:  {timing_stats['optimizer_step']:.3f}s ({timing_stats['optimizer_step']/epoch_total_time*100:.1f}%)")
+            print(f"  TQDM Updates:    {timing_stats['tqdm_update']:.3f}s ({timing_stats['tqdm_update']/epoch_total_time*100:.1f}%)")
+            
+            # Calculate per-batch averages
+            print(f"  Per-batch avg:   {epoch_total_time/num_batches:.3f}s")
+            if timing_stats['dp_processing'] > 0:
+                print(f"  DP overhead:     {timing_stats['dp_processing']/num_batches:.3f}s per batch")
         
         avg_loss = total_loss / (num_epochs * len(dataloader))
         accuracy = 100. * correct / total
