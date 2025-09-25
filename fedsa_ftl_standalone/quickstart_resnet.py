@@ -896,12 +896,10 @@ def main():
     best_round = 0
     start_time = time.time()
     
-    # Create main progress bar for rounds
-    round_pbar = tqdm(range(config['federated']['num_rounds']), 
-                     desc="Federated Rounds",
-                     unit="round")
+    # No progress bar for maximum performance
+    round_range = range(config['federated']['num_rounds'])
     
-    for round_idx in round_pbar:
+    for round_idx in round_range:
         print(f"\n[Round {round_idx + 1}/{config['federated']['num_rounds']}]")
         round_start_time = time.time()
         
@@ -923,14 +921,10 @@ def main():
         client_updates = []
         train_accuracies = []
         
-        # Create progress bar for client training
-        client_pbar = tqdm(selected_clients, 
-                          desc="Training clients",
-                          leave=False,
-                          unit="client")
+        # No client progress bar for maximum performance
+        client_list = selected_clients
         
-        for client_id in client_pbar:
-            client_pbar.set_description(f"Training client {client_id}")
+        for client_id in client_list:
             # Get client training data with optional Mixup/CutMix
             client_dataloader = get_client_dataloader(
                 trainset,
