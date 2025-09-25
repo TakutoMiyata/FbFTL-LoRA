@@ -264,7 +264,6 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         scaler = torch.amp.GradScaler('cuda') if (self.use_amp and torch.cuda.is_available() and not model_is_half) else None
         
         for epoch in range(num_epochs):
-            epoch_loss = 0.0
             epoch_start_time = time.time()
             
             # Timing statistics for this epoch
@@ -322,9 +321,13 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     timing_stats['optimizer_step'] += time.time() - optimizer_start
                     
                     # Forward pass (AMP disabled for DP)
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()  # Ensure previous ops complete
                     forward_start = time.time()
                     with torch.amp.autocast('cuda', enabled=False):
                         output = self.model(data)
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()  # Wait for forward to complete
                     timing_stats['forward_pass'] += time.time() - forward_start
                     
                     # Loss computation timing
@@ -336,8 +339,12 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     timing_stats['loss_computation'] += time.time() - loss_start
                     
                     # Backward pass - computes gradients for all parameters
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
                     backward_start = time.time()
                     loss.backward()
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
                     timing_stats['backward_pass'] += time.time() - backward_start
                     
                     # Manually apply DP to A parameters only (optimized)
@@ -461,26 +468,47 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                         self.optimizer.step()
                     timing_stats['backward_pass'] += time.time() - step_start
                 
-                # Track metrics
-                metrics_start = time.time()
-                epoch_loss += loss.item()
+                # Track metrics (deferred to avoid GPU sync)
+                # Store loss as tensor to avoid .item() sync
+                if batch_idx == 0:
+                    loss_accumulator = loss.detach()
+                else:
+                    loss_accumulator = loss_accumulator + loss.detach()
+                
+                # Calculate accuracy without .item() to avoid sync
                 pred = output.argmax(dim=1, keepdim=True)
-                correct += pred.eq(target_for_acc.view_as(pred)).sum().item()
+                batch_correct = pred.eq(target_for_acc.view_as(pred)).sum()
+                
+                # Accumulate on GPU to avoid sync
+                if batch_idx == 0:
+                    correct_accumulator = batch_correct
+                else:
+                    correct_accumulator = correct_accumulator + batch_correct
+                
                 total += target_for_acc.size(0)
-                timing_stats['metrics_calc'] += time.time() - metrics_start
                 
                 # Update progress bar every 10 batches for performance
                 tqdm_start = time.time()
                 if batch_idx % 10 == 0 or batch_idx == len(dataloader) - 1:
+                    # Only sync when updating display (infrequent)
+                    current_loss = loss.item()
+                    current_correct = correct_accumulator.item() if 'correct_accumulator' in locals() else 0
                     pbar.set_postfix({
-                        'loss': f'{loss.item():.4f}',
-                        'avg_loss': f'{epoch_loss/(batch_idx+1):.4f}',
-                        'acc': f'{100.*correct/total:.2f}%'
+                        'loss': f'{current_loss:.4f}',
+                        'acc': f'{100.*current_correct/total:.2f}%' if total > 0 else 'N/A'
                     })
                 timing_stats['tqdm_update'] += time.time() - tqdm_start
                 
                 # Record end of this batch for next iteration's data loading measurement
                 prev_batch_end = time.time()
+            
+            # Sync at epoch end to get final values
+            if 'loss_accumulator' in locals():
+                epoch_loss = loss_accumulator.item()
+            if 'correct_accumulator' in locals():
+                correct = correct_accumulator.item()
+            else:
+                correct = 0
             
             total_loss += epoch_loss
             
