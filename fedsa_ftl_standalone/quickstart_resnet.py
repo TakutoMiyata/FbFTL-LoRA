@@ -15,6 +15,30 @@ import random
 import json
 import time
 from datetime import datetime
+import os
+# Disable tqdm globally BEFORE importing
+os.environ['TQDM_DISABLE'] = '1'
+
+# Override tqdm to be a no-op
+class NoOpTqdm:
+    def __init__(self, iterable=None, *args, **kwargs):
+        self.iterable = iterable or []
+    def __iter__(self):
+        return iter(self.iterable)
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        pass
+    def set_postfix(self, *args, **kwargs):
+        pass
+    def update(self, *args, **kwargs):
+        pass
+
+# Monkey patch tqdm
+import sys
+sys.modules['tqdm'] = type(sys)('tqdm')
+sys.modules['tqdm'].tqdm = NoOpTqdm
+
 from tqdm import tqdm
 
 # Opacus for differential privacy
@@ -413,6 +437,18 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 })
             
             total_loss += epoch_loss
+            
+            # Simple epoch completion message with loss info
+            if 'loss_accumulator' in locals() and epoch == 0:
+                # Show first epoch loss to check transfer learning
+                first_epoch_loss = loss_accumulator.item() / len(dataloader)
+                print(f"Client {self.client_id} - Epoch {epoch+1} completed (avg loss: {first_epoch_loss:.4f})")
+                
+                # Check if loss is too high (indicating poor initialization)
+                if first_epoch_loss > 5.0:
+                    print(f"  ⚠️  WARNING: High initial loss ({first_epoch_loss:.4f}) suggests pretrained weights may not be loaded!")
+            else:
+                print(f"Client {self.client_id} - Epoch {epoch+1} completed")
         
         avg_loss = total_loss / (num_epochs * len(dataloader))
         accuracy = 100. * correct / total
@@ -771,6 +807,24 @@ def main():
         initial_model = make_model_with_lora(config)
         initial_model = initial_model.to(device)  # Move to GPU
         print_model_summary(config, initial_model)
+        
+        # Debug: Check if pretrained weights are loaded
+        print(f"🔍 Transfer Learning Check:")
+        print(f"  Model name: {config['model']['model_name']}")
+        print(f"  Pretrained: {config['model'].get('pretrained', True)}")
+        print(f"  Freeze backbone: {config['model'].get('freeze_backbone', True)}")
+        
+        # Count trainable parameters
+        total_params = sum(p.numel() for p in initial_model.parameters())
+        trainable_params = sum(p.numel() for p in initial_model.parameters() if p.requires_grad)
+        frozen_params = total_params - trainable_params
+        
+        print(f"  Total params: {total_params:,}")
+        print(f"  Trainable: {trainable_params:,} ({100*trainable_params/total_params:.1f}%)")
+        print(f"  Frozen: {frozen_params:,} ({100*frozen_params/total_params:.1f}%)")
+        
+        if trainable_params / total_params > 0.5:
+            print(f"  ⚠️  WARNING: Too many trainable params! Transfer learning may not be working properly.")
     else:
         # Use CIFAR-optimized ResNet with LoRA (legacy)
         print(f"Creating CIFAR-optimized {config['model']['model_name']} model with LoRA (32x32 input)...")
@@ -935,7 +989,7 @@ def main():
                 clients[client_id].update_model({'A_params': server.global_A_params})
             
             # Local training
-            client_result = clients[client_id].train(client_dataloader, config['training'])
+            client_result = clients[client_id].train(client_dataloader, config['training'], debug_timing=False)
             client_updates.append(client_result)
             train_accuracies.append(client_result['accuracy'])
             
