@@ -22,6 +22,8 @@ data:
   model_type: imagenet
   num_clients: 10
   num_workers: 8
+  pin_memory: true
+  persistent_workers: true
   verbose: false
   augmentations:
     color_jitter:
@@ -100,7 +102,7 @@ training:
   lr: 0.001  # Scaled with larger batch size (256)
   weight_decay: 0.01
   scheduler: cosine
-  warmup_epochs: 2
+  warmup_epochs: 1
   label_smoothing: 0.1
   gradient_clip: 1.0
   optimizer: sgd
