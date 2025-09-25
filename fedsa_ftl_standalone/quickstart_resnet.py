@@ -850,11 +850,15 @@ def main():
     # Create results directory with date and ResNet identifier
     current_date = datetime.now().strftime('%m%d')  # MMDD format
     base_experiment_dir = Path(config.get('experiment', {}).get('output_dir', 'experiments/quickstart_resnet'))
-    experiment_dir = base_experiment_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    # Create method-specific subdirectory (e.g., quickstart_resnet_iid/fedsa or /fedsa_shareA_dp)
+    agg_method = config.get('federated', {}).get('aggregation_method', 'unknown')
+    method_subdir = agg_method.lower()
+    method_dir = base_experiment_dir / method_subdir
+    experiment_dir = method_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
     # Ensure directory exists
     experiment_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Results will be saved to: {experiment_dir}")
+    print(f"Results will be saved to: {experiment_dir} (aggregation_method={agg_method})")
     
     # Generate file names with date and ResNet identifier
     date_resnet_suffix = f"{current_date}ResNet"
