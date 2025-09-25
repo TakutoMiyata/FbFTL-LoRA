@@ -16,42 +16,11 @@ import json
 import time
 from datetime import datetime
 import os
-# Create NoOpTqdm class to completely disable progress bars
-class NoOpTqdm:
-    """No-operation replacement for tqdm to disable all progress bars"""
-    def __init__(self, iterable=None, desc=None, leave=None, unit=None, total=None, **kwargs):
-        self.iterable = iterable
-        self.desc = desc
-        self.n = 0
-        self.total = total if total is not None else (len(iterable) if hasattr(iterable, '__len__') else None)
-    
-    def __iter__(self):
-        if self.iterable is not None:
-            for item in self.iterable:
-                yield item
-                self.n += 1
-        return self
-    
-    def __enter__(self):
-        return self
-    
-    def __exit__(self, *args):
-        pass
-    
-    def set_description(self, desc):
-        pass
-    
-    def set_postfix(self, **kwargs):
-        pass
-    
-    def update(self, n=1):
-        self.n += n
-    
-    def close(self):
-        pass
+# Disable tqdm globally BEFORE importing
+os.environ['TQDM_DISABLE'] = '1'
 
-# Use NoOpTqdm instead of real tqdm to eliminate all progress bars
-tqdm = NoOpTqdm
+
+from tqdm import tqdm
 
 # Opacus for differential privacy
 try:
@@ -302,11 +271,11 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         for epoch in range(num_epochs):
             epoch_loss = 0.0
             
-            # Add progress bar for batches
-            pbar = tqdm(dataloader, 
-                       desc=f"Client {self.client_id} - Epoch {epoch+1}/{num_epochs}",
-                       leave=False,
-                       unit="batch")
+            # # Add progress bar for batches
+            # pbar = tqdm(dataloader, 
+            #            desc=f"Client {self.client_id} - Epoch {epoch+1}/{num_epochs}",
+            #            leave=False,
+            #            unit="batch")
             
             for batch_idx, (data, target) in enumerate(pbar):
                 data, target = data.to(self.device), target.to(self.device)
@@ -952,9 +921,9 @@ def main():
     start_time = time.time()
     
     # Create main progress bar for rounds
-    round_pbar = tqdm(range(config['federated']['num_rounds']), 
-                     desc="Federated Rounds",
-                     unit="round")
+    # round_pbar = tqdm(range(config['federated']['num_rounds']), 
+    #                  desc="Federated Rounds",
+    #                  unit="round")
     
     for round_idx in round_pbar:
         print(f"\n[Round {round_idx + 1}/{config['federated']['num_rounds']}]")
@@ -979,10 +948,10 @@ def main():
         train_accuracies = []
         
         # Create progress bar for client training
-        client_pbar = tqdm(selected_clients, 
-                          desc="Training clients",
-                          leave=False,
-                          unit="client")
+        # client_pbar = tqdm(selected_clients, 
+        #                   desc="Training clients",
+        #                   leave=False,
+        #                   unit="client")
         
         for client_id in client_pbar:
             client_pbar.set_description(f"Training client {client_id}")
@@ -1001,7 +970,7 @@ def main():
                 clients[client_id].update_model({'A_params': server.global_A_params})
             
             # Local training
-            client_result = clients[client_id].train(client_dataloader, config['training'], debug_timing=False)
+            client_result = clients[client_id].train(client_dataloader, config['training'])
             client_updates.append(client_result)
             train_accuracies.append(client_result['accuracy'])
             
