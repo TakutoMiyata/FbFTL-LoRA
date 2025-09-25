@@ -219,7 +219,12 @@ def build_backbone(model_name: str, num_classes: int, pretrained: bool = True):
         model = models.mobilenet_v2(weights=weights)
         # Replace classifier
         in_features = model.classifier[1].in_features
-        model.classifier[1] = nn.Linear(in_features, num_classes)
+        new_classifier = nn.Linear(in_features, num_classes)
+        # Better initialization for transfer learning
+        if pretrained:
+            nn.init.xavier_normal_(new_classifier.weight)
+            nn.init.zeros_(new_classifier.bias)
+        model.classifier[1] = new_classifier
         return model
 
     elif model_name == "efficientnet_b0":
@@ -277,6 +282,17 @@ def make_model_with_lora(config: Dict[str, Any]):
     
     # Build base model
     model = build_backbone(model_name, num_classes, pretrained)
+    
+    # Debug: Check if pretrained weights are loaded
+    if pretrained:
+        # Check first conv layer weights (should be non-zero if pretrained)
+        first_param = next(model.parameters())
+        weight_mean = first_param.data.abs().mean().item()
+        print(f"✅ Pretrained weights check: First layer weight mean = {weight_mean:.6f}")
+        if weight_mean < 0.001:
+            print("⚠️  WARNING: Weights appear to be near zero! Pretrained weights may not be loaded correctly!")
+        else:
+            print("✅ Pretrained weights appear to be loaded successfully")
     
     # Inject LoRA if enabled
     if use_lora:

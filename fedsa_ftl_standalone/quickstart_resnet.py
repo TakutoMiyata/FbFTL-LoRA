@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Quick start script for ResNet federated learning on CIFAR-100
+Quick start script for MobileNetV2 federated transfer learning on CIFAR-100
 Adapted from quickstart_vit.py for ResNet models
 """
 
@@ -578,7 +578,7 @@ def main():
         print("Slack notifications disabled (set SLACK_WEBHOOK_URL environment variable to enable)")
 
     parser = argparse.ArgumentParser(description='FedSA-LoRA ResNet (A matrices only)')
-    parser.add_argument('--config', type=str, default='configs/cifar100_resnet50.yaml',
+    parser.add_argument('--config', type=str, default='configs/cifar100_mobilenet.yaml',
                        help='Path to configuration file')
     parser.add_argument('--rounds', type=int, default=None,
                        help='Override number of rounds')
@@ -593,7 +593,7 @@ def main():
     config_path = Path(args.config)
     if not config_path.exists():
         print(f"Configuration file not found: {config_path}")
-        print("Creating default configuration for ResNet50 on CIFAR-100...")
+        print("Creating default configuration for MobileNetV2 on CIFAR-100 with transfer learning...")
         
         # Create default config if not exists
         default_config = {
@@ -607,7 +607,9 @@ def main():
                 'alpha': 0.5,
                 'batch_size': 64,
                 'num_workers': 4,
-                'model_type': 'resnet',
+                'model_type': 'imagenet',  # Use ImageNet model for transfer learning
+                'imagenet_style': True,  # Enable ImageNet-style preprocessing
+                'input_size': 224,  # ImageNet input size
                 'verbose': False,
                 'augmentations': {
                     'horizontal_flip': {'enabled': True, 'prob': 0.5},
@@ -620,18 +622,23 @@ def main():
                         'hue': 0.1
                     },
                     'random_crop': {'enabled': False, 'padding': 4},
+                    'random_resized_crop': {'enabled': True, 'scale_min': 0.5},  # For ImageNet-style
                     'random_erasing': {'enabled': False, 'prob': 0.5},
                     'mixup': {'enabled': False, 'alpha': 0.2, 'prob': 0.5},
                     'cutmix': {'enabled': False, 'alpha': 1.0, 'prob': 0.5}
                 }
             },
             'model': {
-                'model_name': 'resnet50',
+                'model_name': 'mobilenet_v2',  # Changed to MobileNetV2 for efficiency
                 'num_classes': 100,
-                'pretrained': True,
-                'lora_r': 8,
-                'lora_alpha': 16,
-                'lora_dropout': 0.1
+                'pretrained': True,  # Use ImageNet pretrained weights
+                'freeze_backbone': True,  # Freeze backbone for transfer learning
+                'lora': {  # LoRA configuration structure
+                    'enabled': True,
+                    'r': 8,
+                    'alpha': 16,
+                    'dropout': 0.1
+                }
             },
             'training': {
                 'epochs': 5,
@@ -644,7 +651,7 @@ def main():
                 'num_rounds': 100,
                 'num_clients': 10,
                 'client_fraction': 1.0,
-                'aggregation_method': 'fedavg',
+                'aggregation_method': 'fedsa',  # Use FedSA for LoRA
                 'checkpoint_freq': 20
             },
             'privacy': {
@@ -657,7 +664,7 @@ def main():
                 'eval_freq': 5
             },
             'experiment': {
-                'name': 'ResNet50_CIFAR100_NonIID',
+                'name': 'MobileNetV2_CIFAR100_NonIID_Transfer',
                 'output_dir': 'experiments/quickstart_resnet'
             },
             'reproducibility': {
@@ -668,7 +675,7 @@ def main():
         # Save default config
         configs_dir = Path("configs")
         configs_dir.mkdir(exist_ok=True)
-        config_path = configs_dir / "cifar100_resnet50.yaml"
+        config_path = configs_dir / "cifar100_mobilenet.yaml"
         with open(config_path, 'w') as f:
             yaml.dump(default_config, f, default_flow_style=False, sort_keys=False)
         print(f"Default configuration saved to: {config_path}")
@@ -836,7 +843,7 @@ def main():
     print(f"  Compression ratio: {model_stats['compression_ratio']:.2f}x")
     
     # Create clients
-    print(f"\nCreating {config['federated']['num_clients']} ResNet federated clients...")
+    print(f"\nCreating {config['federated']['num_clients']} MobileNetV2 federated clients with transfer learning...")
     clients = []
     
     
@@ -912,7 +919,7 @@ def main():
         clients.append(client)
     
     print(f"✅ All {len(clients)} clients initialized with synchronized A matrices (B matrices remain local)")
-    print("Starting ResNet federated training...")
+    print("Starting MobileNetV2 federated training with transfer learning...")
     print("=" * 80)
     
     # Training loop
@@ -1320,11 +1327,11 @@ def main():
     
     # Evaluation
     if best_accuracy > 20:  # Reasonable threshold for CIFAR-100
-        print("🎉 ResNet federated learning successful!")
+        print("🎉 MobileNetV2 federated transfer learning successful!")
     elif best_accuracy > 10:
-        print("⚠️ ResNet learning in progress - consider more rounds")
+        print("⚠️ MobileNetV2 transfer learning in progress - consider more rounds")
     else:
-        print("❌ ResNet learning may need hyperparameter tuning")
+        print("❌ MobileNetV2 transfer learning may need hyperparameter tuning")
 
 
 if __name__ == "__main__":
