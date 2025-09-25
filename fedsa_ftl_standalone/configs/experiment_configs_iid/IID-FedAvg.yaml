@@ -106,7 +106,7 @@ seed: 42
 
 training:
   epochs: 3
-  lr: 0.01  # Scaled with larger batch size (256)
+  lr: 0.005  # Scaled with larger batch size (256)
   weight_decay: 0.002
   scheduler: cosine
   warmup_epochs: 0

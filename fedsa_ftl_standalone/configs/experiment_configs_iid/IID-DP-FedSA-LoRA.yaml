@@ -17,11 +17,11 @@ data:
   data_split: iid
   input_size: 224
   imagenet_style: true
-  batch_size: 256
+  batch_size: 128
   data_dir: ./data
   model_type: imagenet
   num_clients: 10
-  num_workers: 4
+  num_workers: 8
   verbose: false
   augmentations:
     color_jitter:
@@ -97,7 +97,7 @@ reproducibility:
 seed: 42
 training:
   epochs: 3
-  lr: 0.01  # Scaled with larger batch size (256)
+  lr: 0.001  # Scaled with larger batch size (256)
   weight_decay: 0.001
   scheduler: cosine
   warmup_epochs: 0
