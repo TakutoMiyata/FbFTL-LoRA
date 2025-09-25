@@ -406,7 +406,6 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                         # Standard training
                         loss.backward()
                         self.optimizer.step()
-                    timing_stats['backward_pass'] += time.time() - step_start
                 
                 # Track metrics (deferred to avoid GPU sync)
                 # Store loss as tensor to avoid .item() sync
