@@ -226,6 +226,9 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         self.model.train()
         self.local_data_size = len(dataloader.dataset)
         
+        # Disable all timing by default for maximum performance
+        measure_time = debug_timing  # Only measure if explicitly debugging
+        
         # Handle DP setup
         if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.privacy_engine is not None:
             if not self.privacy_engine_attached:
@@ -264,40 +267,47 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         scaler = torch.amp.GradScaler('cuda') if (self.use_amp and torch.cuda.is_available() and not model_is_half) else None
         
         for epoch in range(num_epochs):
-            epoch_start_time = time.time()
+            if measure_time:
+                epoch_start_time = time.time()
+                # Timing statistics for this epoch
+                timing_stats = {
+                    'data_loading': 0.0,
+                    'data_transfer': 0.0,
+                    'forward_pass': 0.0,
+                    'loss_computation': 0.0,
+                    'backward_pass': 0.0,
+                    'dp_processing': 0.0,
+                    'optimizer_step': 0.0,
+                    'metrics_calc': 0.0,
+                    'tqdm_update': 0.0,
+                    'other': 0.0
+                }
             
-            # Timing statistics for this epoch
-            timing_stats = {
-                'data_loading': 0.0,  # DataLoader iteration time
-                'data_transfer': 0.0,
-                'forward_pass': 0.0,
-                'loss_computation': 0.0,
-                'backward_pass': 0.0,
-                'dp_processing': 0.0,
-                'optimizer_step': 0.0,
-                'metrics_calc': 0.0,  # Accuracy calculation
-                'tqdm_update': 0.0,
-                'other': 0.0  # Everything else
-            }
+            # Progress bar only if debugging
+            if debug_timing:
+                pbar = tqdm(dataloader, 
+                           desc=f"Client {self.client_id} - Epoch {epoch+1}/{num_epochs}",
+                           leave=False,
+                           unit="batch")
+            else:
+                # No progress bar for maximum performance
+                pbar = dataloader
             
-            # Add progress bar for batches
-            pbar = tqdm(dataloader, 
-                       desc=f"Client {self.client_id} - Epoch {epoch+1}/{num_epochs}",
-                       leave=False,
-                       unit="batch")
+            if measure_time:
+                prev_batch_end = time.time()
             
-            prev_batch_end = time.time()
             for batch_idx, (data, target) in enumerate(pbar):
-                # Measure the time spent waiting for the next batch (data loading from disk/CPU)
-                data_wait_time = time.time() - prev_batch_end
-                timing_stats['data_loading'] += data_wait_time
+                # Skip all timing unless measuring
+                if measure_time:
+                    data_wait_time = time.time() - prev_batch_end
+                    timing_stats['data_loading'] += data_wait_time
+                    batch_start_time = time.time()
                 
-                batch_start_time = time.time()
-                
-                # Data transfer timing
-                if debug_timing and torch.cuda.is_available():
-                    torch.cuda.synchronize()
-                data_start = time.time()
+                # Data transfer (with optional timing)
+                if measure_time:
+                    if debug_timing and torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                    data_start = time.time()
                 data, target = data.to(self.device), target.to(self.device)
                 
                 # Convert input to half precision if model is half precision
@@ -312,27 +322,34 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     target_for_loss = target
                     target_for_acc = target
                 
-                if debug_timing and torch.cuda.is_available():
-                    torch.cuda.synchronize()  # Wait for transfer to complete
-                timing_stats['data_transfer'] += time.time() - data_start
+                if measure_time:
+                    if debug_timing and torch.cuda.is_available():
+                        torch.cuda.synchronize()  # Wait for transfer to complete
+                    timing_stats['data_transfer'] += time.time() - data_start
                 
                 # Two-phase training for DP with manual noise injection
                 if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.privacy_engine_attached:
                     # Clear gradients for both optimizers
-                    optimizer_start = time.time()
+                    if measure_time:
+                        optimizer_start = time.time()
                     self.dp_optimizer.zero_grad()
                     self.local_optimizer.zero_grad()
-                    timing_stats['optimizer_step'] += time.time() - optimizer_start
+                    if measure_time:
+                        timing_stats['optimizer_step'] += time.time() - optimizer_start
                     
                     # Forward pass (AMP disabled for DP)
-                    if debug_timing and torch.cuda.is_available():
-                        torch.cuda.synchronize()  # Ensure previous ops complete
-                    forward_start = time.time()
+                    if measure_time:
+                        if debug_timing and torch.cuda.is_available():
+                            torch.cuda.synchronize()
+                        forward_start = time.time()
+                    
                     with torch.amp.autocast('cuda', enabled=False):
                         output = self.model(data)
-                    if debug_timing and torch.cuda.is_available():
-                        torch.cuda.synchronize()  # Wait for forward to complete
-                    timing_stats['forward_pass'] += time.time() - forward_start
+                    
+                    if measure_time:
+                        if debug_timing and torch.cuda.is_available():
+                            torch.cuda.synchronize()
+                        timing_stats['forward_pass'] += time.time() - forward_start
                     
                     # Loss computation timing
                     loss_start = time.time()
@@ -491,20 +508,23 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 
                 total += target_for_acc.size(0)
                 
-                # Update progress bar every 10 batches for performance
-                tqdm_start = time.time()
-                if batch_idx % 10 == 0 or batch_idx == len(dataloader) - 1:
-                    # Only sync when updating display (infrequent)
-                    current_loss = loss.item()
-                    current_correct = correct_accumulator.item() if 'correct_accumulator' in locals() else 0
-                    pbar.set_postfix({
-                        'loss': f'{current_loss:.4f}',
-                        'acc': f'{100.*current_correct/total:.2f}%' if total > 0 else 'N/A'
-                    })
-                timing_stats['tqdm_update'] += time.time() - tqdm_start
+                # Update progress bar only if using tqdm
+                if debug_timing and hasattr(pbar, 'set_postfix'):
+                    tqdm_start = time.time() if measure_time else 0
+                    if batch_idx % 10 == 0 or batch_idx == len(dataloader) - 1:
+                        # Only sync when updating display (infrequent)
+                        current_loss = loss.item()
+                        current_correct = correct_accumulator.item() if 'correct_accumulator' in locals() else 0
+                        pbar.set_postfix({
+                            'loss': f'{current_loss:.4f}',
+                            'acc': f'{100.*current_correct/total:.2f}%' if total > 0 else 'N/A'
+                        })
+                    if measure_time:
+                        timing_stats['tqdm_update'] += time.time() - tqdm_start
                 
                 # Record end of this batch for next iteration's data loading measurement
-                prev_batch_end = time.time()
+                if measure_time:
+                    prev_batch_end = time.time()
             
             # Sync at epoch end to get final values
             if 'loss_accumulator' in locals():
@@ -550,9 +570,10 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 
                 if timing_stats['dp_processing'] > 0:
                     print(f"  DP overhead:     {timing_stats['dp_processing']/num_batches:.3f}s per batch")
-            else:
-                # Normal mode: just print epoch summary
-                print(f"Client {self.client_id} - Epoch {epoch+1}: {epoch_total_time:.1f}s ({num_batches} batches, {epoch_total_time/num_batches:.2f}s/batch)")
+            # Simple epoch summary (always print)
+            if not measure_time:
+                # Fast path - no timing overhead
+                print(f"Client {self.client_id} - Epoch {epoch+1} completed")
         
         avg_loss = total_loss / (num_epochs * len(dataloader))
         accuracy = 100. * correct / total
