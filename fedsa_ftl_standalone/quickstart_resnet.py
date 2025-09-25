@@ -272,10 +272,10 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             epoch_loss = 0.0
             
             # # Add progress bar for batches
-            # pbar = tqdm(dataloader, 
-            #            desc=f"Client {self.client_id} - Epoch {epoch+1}/{num_epochs}",
-            #            leave=False,
-            #            unit="batch")
+            pbar = tqdm(dataloader, 
+                       desc=f"Client {self.client_id} - Epoch {epoch+1}/{num_epochs}",
+                       leave=False,
+                       unit="batch")
             
             for batch_idx, (data, target) in enumerate(pbar):
                 data, target = data.to(self.device), target.to(self.device)
@@ -921,9 +921,9 @@ def main():
     start_time = time.time()
     
     # Create main progress bar for rounds
-    # round_pbar = tqdm(range(config['federated']['num_rounds']), 
-    #                  desc="Federated Rounds",
-    #                  unit="round")
+    round_pbar = tqdm(range(config['federated']['num_rounds']), 
+                     desc="Federated Rounds",
+                     unit="round")
     
     for round_idx in round_pbar:
         print(f"\n[Round {round_idx + 1}/{config['federated']['num_rounds']}]")
@@ -948,10 +948,10 @@ def main():
         train_accuracies = []
         
         # Create progress bar for client training
-        # client_pbar = tqdm(selected_clients, 
-        #                   desc="Training clients",
-        #                   leave=False,
-        #                   unit="client")
+        client_pbar = tqdm(selected_clients, 
+                          desc="Training clients",
+                          leave=False,
+                          unit="client")
         
         for client_id in client_pbar:
             client_pbar.set_description(f"Training client {client_id}")
