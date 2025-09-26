@@ -296,6 +296,11 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
 
                 if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.privacy_engine_attached:
                     # --- DP-A + non-DP B/classifier ---
+                    # Ensure grad_sample attributes exist before backward
+                    for p in self.model.parameters():
+                        if not hasattr(p, 'grad_sample'):
+                            p.grad_sample = None
+                    
                     self.dp_optimizer.zero_grad()
                     self.local_optimizer.zero_grad()
 
@@ -373,11 +378,16 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         # Comprehensive cleanup after training (memory efficiency)
         # This is safe to do after all epochs are complete
         if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp':
-            # For DP mode, use Opacus's zero_grad to properly clear gradients
-            self.dp_optimizer.zero_grad(set_to_none=True)
+            # For DP mode, careful cleanup to avoid breaking next round
+            # Don't use set_to_none=True as it may break grad_sample tracking
+            self.dp_optimizer.zero_grad()
             
-            # Then do comprehensive cleanup
-            comprehensive_grad_sample_cleanup(self.model, verbose=False)
+            # Light cleanup - don't remove grad_sample completely
+            # Just clear the values but keep the attributes
+            for p in self.model.parameters():
+                if hasattr(p, 'grad_sample') and p.grad_sample is not None:
+                    # Clear the tensor but keep the attribute
+                    p.grad_sample = None
         else:
             # Standard cleanup for non-DP
             safe_clear_grad_sample(self.model)
