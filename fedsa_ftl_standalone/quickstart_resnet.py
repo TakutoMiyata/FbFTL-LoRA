@@ -64,14 +64,19 @@ def safe_clear_grad_sample(model):
     Args:
         model: PyTorch model with potential grad_sample attributes
     """
-    if clear_grad_sample is not None:
-        try:
+    try:
+        # First try the official Opacus method if available
+        if clear_grad_sample is not None:
             clear_grad_sample(model)
-        except Exception as e:
-            print(f"Warning: Opacus clear_grad_sample failed: {e}, using manual fallback")
+        else:
             manual_clear_grad_sample(model)
-    else:
-        manual_clear_grad_sample(model)
+    except Exception as e:
+        # Fallback to manual method if official method fails
+        try:
+            manual_clear_grad_sample(model)
+        except Exception as e2:
+            # If both fail, just continue (grad_sample may already be cleared)
+            pass
 
 
 def comprehensive_grad_sample_cleanup(model, verbose=False):
@@ -347,38 +352,35 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     'avg_loss': f'{epoch_loss/(batch_idx+1):.4f}',
                     'acc': f'{100.*correct/total:.2f}%'
                 })
-                
-                # Batch-level cleanup for DP mode (every 10 batches to balance performance)
-                if (self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and 
-                    batch_idx % 10 == 9):
-                    # Light cleanup of accumulated per-sample gradients
-                    # Note: grad_samples is a property in DPOptimizer, clear underlying grad_sample attributes
-                    safe_clear_grad_sample(self.model)
 
             total_loss += epoch_loss
             print(f"Client {self.client_id} - Epoch {epoch+1} completed")
             
-            # Epoch-level memory cleanup (especially important for DP mode)
-            if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp':
-                # Clear per-sample gradients accumulated during this epoch
-                safe_clear_grad_sample(self.model)
-                
-                # GPU memory cleanup every epoch for DP (memory intensive)
-                if torch.cuda.is_available():
+            # Epoch-level memory cleanup
+            # Note: We cannot clear grad_sample during training as Opacus needs it
+            # Only clear GPU cache which is safe
+            if torch.cuda.is_available():
+                if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp':
+                    # More aggressive GPU cleanup for DP mode
                     torch.cuda.empty_cache()
-            else:
-                # For non-DP modes, lighter cleanup every other epoch
-                if epoch % 2 == 1 and torch.cuda.is_available():
+                elif epoch % 2 == 1:
+                    # Lighter cleanup for non-DP modes
                     torch.cuda.empty_cache()
 
         avg_loss = total_loss / (num_epochs * len(dataloader))
         accuracy = 100. * correct / total
 
         # Comprehensive cleanup after training (memory efficiency)
-        safe_clear_grad_sample(self.model)
-        
-        # Clear any remaining per-sample gradient artifacts
-        comprehensive_grad_sample_cleanup(self.model, verbose=False)
+        # This is safe to do after all epochs are complete
+        if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp':
+            # For DP mode, use Opacus's zero_grad to properly clear gradients
+            self.dp_optimizer.zero_grad(set_to_none=True)
+            
+            # Then do comprehensive cleanup
+            comprehensive_grad_sample_cleanup(self.model, verbose=False)
+        else:
+            # Standard cleanup for non-DP
+            safe_clear_grad_sample(self.model)
         
         # --- FedSA 用: A だけ返す ---
         update = {
