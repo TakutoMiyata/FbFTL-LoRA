@@ -185,6 +185,11 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 cls_params = list(model.head.parameters())
 
             self.local_params = self.B_params + cls_params
+            
+            # Safety check for local parameters
+            if len(self.local_params) == 0:
+                print(f"Warning: client {client_id} has no local_params (B+classifier). Check head detection.")
+                print(f"  Model has: classifier={hasattr(model, 'classifier')}, fc={hasattr(model, 'fc')}, head={hasattr(model, 'head')}")
 
             # Create optimizers for A-only and B+classifier
             self.dp_optimizer = torch.optim.SGD(self.A_params, **opt_kwargs)
@@ -224,6 +229,11 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         
         # Initial cleanup: ensure model starts without any grad_sample artifacts
         comprehensive_grad_sample_cleanup(self.model, verbose=False)
+    
+    def _unwrap(self):
+        """Unwrap Opacus GradSampleModule to access original model methods"""
+        # Opacus 1.x wraps model in GradSampleModule which has _module attribute
+        return getattr(self.model, "_module", self.model)
     
     def train(self, dataloader, training_config):
         """Train the model with A-only DP-SGD (via Opacus) and non-DP B+classifier"""
@@ -340,9 +350,12 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         avg_loss = total_loss / (num_epochs * len(dataloader))
         accuracy = 100. * correct / total
 
+        # Clean up per-sample gradients after training (memory efficiency)
+        safe_clear_grad_sample(self.model)
+        
         # --- FedSA 用: A だけ返す ---
         update = {
-            'A_params': self.model.get_A_parameters(),
+            'A_params': self._unwrap().get_A_parameters(),
             'num_samples': self.local_data_size,
             'local_data_size': self.local_data_size,
             'loss': avg_loss,
@@ -369,7 +382,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         """Update model with global A parameters (FedSA-LoRA)"""
         # Only update A parameters, keep B local
         if 'A_params' in global_params:
-            self.model.set_A_parameters(global_params['A_params'])
+            self._unwrap().set_A_parameters(global_params['A_params'])
             print(f"Client {self.client_id}: Updated A matrices from server")
             
             # Note: self.model.set_A_parameters() uses copy_() which preserves parameter identity
@@ -394,8 +407,8 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         
         if self.aggregation_method == 'fedsa_shareA_dp':
-            A_params = sum(p.numel() for p in self.model.get_A_parameter_groups())
-            B_params = sum(p.numel() for p in self.model.get_B_parameter_groups())
+            A_params = sum(p.numel() for p in self._unwrap().get_A_parameter_groups())
+            B_params = sum(p.numel() for p in self._unwrap().get_B_parameter_groups())
             communication_params = A_params  # Only A is communicated
             compression_ratio = total_params / communication_params if communication_params > 0 else 1.0
         else:
