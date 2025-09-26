@@ -57,7 +57,7 @@ def load_results(results_dir):
 
 
 def plot_accuracy_curves(results, save_dir):
-    """Plot training and test accuracy curves"""
+    """Plot training and test accuracy curves with optional privacy tracking"""
     # Check if this is federated learning (rounds) or single client (epochs) data
     if 'rounds' in results:
         # Federated learning data
@@ -68,6 +68,9 @@ def plot_accuracy_curves(results, save_dir):
         # Handle different test accuracy field names
         test_accs = []
         test_rounds = []
+        epsilons = []  # For privacy tracking
+        epsilon_rounds = []  # Rounds where epsilon is available
+        
         for r in rounds_data:
             # Try different possible field names for test accuracy
             test_acc = None
@@ -81,6 +84,11 @@ def plot_accuracy_curves(results, save_dir):
             if test_acc is not None:
                 test_accs.append(test_acc)
                 test_rounds.append(r['round'])
+            
+            # Collect epsilon values if available (for DP models)
+            if 'epsilon' in r and r['epsilon'] is not None:
+                epsilons.append(r['epsilon'])
+                epsilon_rounds.append(r['round'])
         
         x_label = 'Round'
         title_prefix = 'Federated Learning'
@@ -96,27 +104,79 @@ def plot_accuracy_curves(results, save_dir):
     else:
         raise ValueError("No 'rounds' or 'epochs' data found in results")
     
-    # Create figure
-    plt.figure(figsize=(12, 8))
+    # Check if we have privacy data
+    has_privacy = len(epsilons) > 0 if 'rounds' in results else False
     
-    # Plot accuracy curves
-    plt.plot(rounds, train_accs, 'b-', label='Training Accuracy', linewidth=2, alpha=0.8)
-    if test_accs:
-        plt.plot(test_rounds, test_accs, 'r-', label='Test Accuracy', linewidth=2, alpha=0.8)
+    # Create figure with subplots if privacy data is available
+    if has_privacy:
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), height_ratios=[2, 1], sharex=True)
+        
+        # Top subplot: Accuracy curves
+        ax1.plot(rounds, train_accs, 'b-', label='Training Accuracy', linewidth=2, alpha=0.8)
+        if test_accs:
+            ax1.plot(test_rounds, test_accs, 'r-', label='Test Accuracy', linewidth=2, alpha=0.8)
+        
+        # Mark best accuracy
+        if test_accs:
+            best_acc = max(test_accs)
+            best_round = test_rounds[test_accs.index(best_acc)]
+            ax1.scatter([best_round], [best_acc], color='red', s=100, zorder=5, 
+                       label=f'Best: {best_acc:.2f}% ({x_label} {best_round})')
+        
+        ax1.set_ylabel('Accuracy (%)', fontsize=12)
+        ax1.set_title(f'{title_prefix} - Accuracy Over Time (with Differential Privacy)', fontsize=14, fontweight='bold')
+        ax1.legend(fontsize=11)
+        ax1.grid(True, alpha=0.3)
+        
+        # Bottom subplot: Privacy budget (epsilon)
+        ax2.plot(epsilon_rounds, epsilons, 'g-', label='Privacy Budget (ε)', linewidth=2, alpha=0.8, marker='o', markersize=4)
+        
+        # Add privacy budget limit if available
+        privacy_config = results.get('config', {}).get('privacy', {})
+        if privacy_config.get('epsilon'):
+            target_epsilon = privacy_config['epsilon']
+            ax2.axhline(y=target_epsilon, color='red', linestyle='--', alpha=0.7, 
+                       label=f'Target ε = {target_epsilon}')
+        
+        # Mark final epsilon
+        if epsilons:
+            final_epsilon = epsilons[-1]
+            ax2.scatter([epsilon_rounds[-1]], [final_epsilon], color='green', s=100, zorder=5)
+            ax2.annotate(f'Final: ε={final_epsilon:.2f}', 
+                        xy=(epsilon_rounds[-1], final_epsilon),
+                        xytext=(10, 10), textcoords='offset points',
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7),
+                        fontsize=10)
+        
+        ax2.set_xlabel(x_label, fontsize=12)
+        ax2.set_ylabel('Privacy Budget (ε)', fontsize=12)
+        ax2.set_title('Differential Privacy Budget Consumption', fontsize=12, fontweight='bold')
+        ax2.legend(fontsize=11)
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+    else:
+        # Standard single plot without privacy tracking
+        plt.figure(figsize=(12, 8))
+        
+        # Plot accuracy curves
+        plt.plot(rounds, train_accs, 'b-', label='Training Accuracy', linewidth=2, alpha=0.8)
+        if test_accs:
+            plt.plot(test_rounds, test_accs, 'r-', label='Test Accuracy', linewidth=2, alpha=0.8)
+        
+        # Mark best accuracy
+        if test_accs:
+            best_acc = max(test_accs)
+            best_round = test_rounds[test_accs.index(best_acc)]
+            plt.scatter([best_round], [best_acc], color='red', s=100, zorder=5, 
+                       label=f'Best: {best_acc:.2f}% ({x_label} {best_round})')
     
-    # Mark best accuracy
-    if test_accs:
-        best_acc = max(test_accs)
-        best_round = test_rounds[test_accs.index(best_acc)]
-        plt.scatter([best_round], [best_acc], color='red', s=100, zorder=5, 
-                   label=f'Best: {best_acc:.2f}% ({x_label} {best_round})')
-    
-    plt.xlabel(x_label, fontsize=12)
-    plt.ylabel('Accuracy (%)', fontsize=12)
-    plt.title(f'{title_prefix} - Accuracy Over Time', fontsize=14, fontweight='bold')
-    plt.legend(fontsize=11)
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
+        plt.xlabel(x_label, fontsize=12)
+        plt.ylabel('Accuracy (%)', fontsize=12)
+        plt.title(f'{title_prefix} - Accuracy Over Time', fontsize=14, fontweight='bold')
+        plt.legend(fontsize=11)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
     
     # Generate filename with date+ViT suffix
     date_suffix = results.get('date_suffix', datetime.now().strftime('%m%d'))
@@ -272,6 +332,9 @@ def plot_summary_dashboard(results, save_dir):
         # Handle different test accuracy field names
         test_accs = []
         test_rounds = []
+        epsilons = []  # For privacy tracking
+        epsilon_rounds = []  # Rounds where epsilon is available
+        
         for r in rounds_data:
             # Try different possible field names for test accuracy
             test_acc = None
@@ -285,11 +348,17 @@ def plot_summary_dashboard(results, save_dir):
             if test_acc is not None:
                 test_accs.append(test_acc)
                 test_rounds.append(r['round'])
+            
+            # Collect epsilon values if available (for DP models)
+            if 'epsilon' in r and r['epsilon'] is not None:
+                epsilons.append(r['epsilon'])
+                epsilon_rounds.append(r['round'])
         
         comm_costs = [r['communication_cost_mb'] for r in rounds_data]
         x_label = 'Round'
         title_suffix = 'Federated Learning'
         has_comm_data = True
+        has_privacy = len(epsilons) > 0
     elif 'epochs' in results:
         epochs_data = results['epochs']
         rounds = [e['epoch'] for e in epochs_data]
@@ -304,8 +373,15 @@ def plot_summary_dashboard(results, save_dir):
         print("No compatible data found for dashboard")
         return
     
-    # Create dashboard
-    fig = plt.figure(figsize=(20, 12))
+    # Create dashboard - adjust layout based on privacy data availability
+    has_privacy = len(epsilons) > 0 if 'rounds' in results else False
+    
+    if has_privacy:
+        # 2x3 grid with privacy plot
+        fig = plt.figure(figsize=(20, 14))
+    else:
+        # Standard 2x3 grid
+        fig = plt.figure(figsize=(20, 12))
     
     # Main accuracy plot (top)
     ax1 = plt.subplot(2, 3, (1, 2))
@@ -373,8 +449,33 @@ def plot_summary_dashboard(results, save_dir):
         ax4.set_title(f'{x_label}-to-{x_label} Improvement', fontsize=12, fontweight='bold')
         ax4.grid(True, alpha=0.3)
     
-    # Performance summary (bottom right)
-    if test_accs:
+    # Performance summary or Privacy tracking (bottom right)
+    if has_privacy and epsilons:
+        # Show privacy budget tracking instead of accuracy distribution
+        ax5 = plt.subplot(2, 3, 6)
+        ax5.plot(epsilon_rounds, epsilons, 'g-', linewidth=2, marker='o', markersize=4, label='Privacy Budget (ε)')
+        
+        # Add privacy budget limit if available
+        privacy_config = config.get('privacy', {})
+        if privacy_config.get('epsilon'):
+            target_epsilon = privacy_config['epsilon']
+            ax5.axhline(y=target_epsilon, color='red', linestyle='--', alpha=0.7, 
+                       label=f'Target ε = {target_epsilon}')
+        
+        # Mark final epsilon
+        if epsilons:
+            final_epsilon = epsilons[-1]
+            ax5.scatter([epsilon_rounds[-1]], [final_epsilon], color='green', s=100, zorder=5)
+            ax5.text(epsilon_rounds[-1], final_epsilon, f' Final: {final_epsilon:.2f}', 
+                    fontsize=10, verticalalignment='center')
+        
+        ax5.set_xlabel(x_label)
+        ax5.set_ylabel('Privacy Budget (ε)')
+        ax5.set_title('Differential Privacy Budget', fontsize=12, fontweight='bold')
+        ax5.legend()
+        ax5.grid(True, alpha=0.3)
+    elif test_accs:
+        # Standard accuracy distribution
         ax5 = plt.subplot(2, 3, 6)
         ax5.hist(test_accs, bins=min(10, len(test_accs)//2), alpha=0.7, color='orange', edgecolor='black')
         ax5.axvline(np.mean(test_accs), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(test_accs):.2f}%')
@@ -384,7 +485,9 @@ def plot_summary_dashboard(results, save_dir):
         ax5.legend()
         ax5.grid(True, alpha=0.3)
     
-    plt.suptitle(f'{title_suffix} Dashboard - {config["model"]["model_name"]}', 
+    # Add DP indicator to title if privacy is enabled
+    privacy_suffix = ' (with DP)' if has_privacy else ''
+    plt.suptitle(f'{title_suffix} Dashboard - {config["model"]["model_name"]}{privacy_suffix}', 
                  fontsize=16, fontweight='bold', y=0.95)
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
     

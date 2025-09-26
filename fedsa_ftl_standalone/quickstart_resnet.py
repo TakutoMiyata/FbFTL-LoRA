@@ -1068,6 +1068,7 @@ def main():
                 print(f"WARNING: Client {i} uploaded unexpected parameters!")
         
         # Enhanced privacy information logging
+        current_epsilon = None  # Initialize for CSV output
         if config.get('privacy', {}).get('enable_privacy', False):
             privacy_analyses = [update.get('privacy_analysis', {}) for update in client_updates if 'privacy_analysis' in update]
             if privacy_analyses:
@@ -1077,6 +1078,7 @@ def main():
                 if epsilons:
                     avg_eps = sum(epsilons) / len(epsilons)
                     max_eps = max(epsilons)  # Report worst-case for safety
+                    current_epsilon = max_eps  # Use max epsilon for conservative tracking
                     
                     print(f"\n  === Privacy Analysis (Opacus DP-SGD A-only) ===")
                     print(f"  Current ε (avg): {avg_eps:.4f}, ε (max): {max_eps:.4f}")
@@ -1156,6 +1158,11 @@ def main():
             'communication_cost_mb': round_stats.get('communication_cost_mb', 0),
             'is_best_round': is_new_best
         }
+        
+        # Add epsilon if using differential privacy
+        if current_epsilon is not None:
+            round_result['epsilon'] = current_epsilon
+        
         results['rounds'].append(round_result)
         
         # Save results to file after each round (with date+ResNet suffix)
@@ -1257,13 +1264,17 @@ def main():
         import pandas as pd
         df_data = []
         for round_data in results['rounds']:
-            df_data.append({
+            row_data = {
                 'round': round_data['round'],
                 'train_accuracy': round_data['avg_train_accuracy'],
                 'test_accuracy': round_data['avg_personalized_accuracy'],
                 'per_round_communication_mb': round_data['communication_cost_mb'],
                 'is_best': round_data['is_best_round']
-            })
+            }
+            # Add epsilon column if available
+            if 'epsilon' in round_data:
+                row_data['epsilon'] = round_data['epsilon']
+            df_data.append(row_data)
         
         if df_data:  # Only create CSV if we have data
             df = pd.DataFrame(df_data)
