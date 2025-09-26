@@ -72,7 +72,7 @@ experiment:
 federated:
   aggregation_method: fedsa
   checkpoint_freq: 25
-  client_fraction: 0.5
+  client_fraction: 0.3
   num_clients: 10
   num_rounds: 100
   exclude_bn_from_agg: true
@@ -99,8 +99,8 @@ reproducibility:
 seed: 42
 training:
   epochs: 3
-  lr: 0.005  # Increased for faster convergence with LoRA and new classifier
-  weight_decay: 0.0005  # Reduced to allow better learning
+  lr: 0.003  # Increased for faster convergence with LoRA and new classifier
+  weight_decay: 0.0003  # Reduced to allow better learning
   scheduler: cosine
   warmup_epochs: 0
   label_smoothing: 0.1

@@ -39,6 +39,19 @@ except ImportError:
     clear_grad_sample = None
     print("Warning: Opacus not available. Install with: pip install opacus")
 
+class LoRAAModule(torch.nn.Module):
+    """
+    Dummy wrapper for LoRA A parameters.
+    Used only to let Opacus compute per-sample gradients for A.
+    Forward is a dummy, since the actual forward is done in the main model.
+    """
+    def __init__(self, A_params):
+        super().__init__()
+        self.A = torch.nn.ParameterList(A_params)
+
+    def forward(self, x=None):
+        # Dummy forward (Opacus requires a forward, but we only need grad_sample)
+        return torch.tensor(0.0, device=self.A[0].device, requires_grad=True)
 
 def manual_clear_grad_sample(model):
     """
@@ -173,11 +186,9 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         )
         
         if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp':
-            # Separate A and B parameters for differential treatment
-            self.A_params = list(model.get_A_parameter_groups())  # LoRA A matrices only
-            self.B_params = list(model.get_B_parameter_groups())  # LoRA B matrices
-            
-            # Get classifier parameters (to be included with B as non-DP)
+            # Separate A and B parameters
+            self.A_params = list(model.get_A_parameter_groups())
+            self.B_params = list(model.get_B_parameter_groups())
             cls_params = []
             if hasattr(model, 'classifier'):
                 cls_params = list(model.classifier.parameters())
@@ -185,21 +196,27 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 cls_params = list(model.fc.parameters())
             elif hasattr(model, 'head'):
                 cls_params = list(model.head.parameters())
-            
-            # Local parameters = B + classifier (non-DP, personalized)
+
             self.local_params = self.B_params + cls_params
-            
-            # Create two separate optimizers
-            self.dp_optimizer = torch.optim.SGD(self.A_params, **opt_kwargs)  # For A (will be DP)
-            self.local_optimizer = torch.optim.SGD(self.local_params, **opt_kwargs)  # For B+cls (non-DP)
-            
-            print(f"Client {client_id}: A params (DP): {len(self.A_params)}, B+cls params (non-DP): {len(self.local_params)}")
-            
-            # Initialize Opacus PrivacyEngine for A-only DP
+
+            # --- NEW: wrap A-only module for Opacus ---
+            self.lora_A_module = LoRAAModule(self.A_params)
+            self.dp_optimizer = torch.optim.SGD(self.lora_A_module.parameters(), **opt_kwargs)
+            self.local_optimizer = torch.optim.SGD(self.local_params, **opt_kwargs)
+
             if OPACUS_AVAILABLE:
                 self.privacy_engine = PrivacyEngine()
-                self.privacy_engine_attached = False
-                print(f"Client {client_id}: Initialized Opacus PrivacyEngine for A-only DP-SGD")
+                self.lora_A_module, self.dp_optimizer, _ = self.privacy_engine.make_private(
+                    module=self.lora_A_module,
+                    optimizer=self.dp_optimizer,
+                    data_loader=None,  # We'll pass sample_rate manually
+                    noise_multiplier=config.get('privacy', {}).get('noise_multiplier', 1.0),
+                    max_grad_norm=config.get('privacy', {}).get('max_grad_norm', 1.0),
+                )
+                self.privacy_engine_attached = True
+                print(f"Client {client_id}: Opacus attached to A-only module")
+            else:
+                raise RuntimeError("Opacus not available")
             
             # For compatibility, set optimizer to None when using separated optimizers
             self.optimizer = None
@@ -227,305 +244,132 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         comprehensive_grad_sample_cleanup(self.model, verbose=False)
     
     def train(self, dataloader, training_config):
-        """Train the model with A-only DP-SGD and non-DP B+classifier"""
+        """Train the model with A-only DP-SGD (via Opacus) and non-DP B+classifier"""
         self.model.train()
         self.local_data_size = len(dataloader.dataset)
-        
-        # Handle DP setup
-        if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.privacy_engine is not None:
-            if not self.privacy_engine_attached:
-                try:
-                    from opacus.grad_sample import GradSampleModule
-                except ImportError:
-                    GradSampleModule = None
-                
-                noise_multiplier = self.config.get('privacy', {}).get('noise_multiplier', 1.0)
-                max_grad_norm = self.config.get('privacy', {}).get('max_grad_norm', 0.5)
-                
-                # IMPORTANT: We cannot use make_private with partial parameters
-                # Instead, we'll manually add noise to A gradients after computing them
-                # This is the only reliable way to achieve true A-only DP
-                
-                self.dp_noise_multiplier = noise_multiplier
-                self.dp_max_grad_norm = max_grad_norm
-                self.privacy_engine_attached = True
-                
-                # Initialize manual privacy accounting
-                from opacus.accountants import RDPAccountant
-                self.privacy_accountant = RDPAccountant()
-                
-                print(f"Client {self.client_id}: Manual DP setup for A-only protection")
-                print(f"  ✓ Noise multiplier: {noise_multiplier}")
-                print(f"  ✓ Max gradient norm: {max_grad_norm}")
-                print(f"  ✓ A-only DP: Manual noise injection for A matrices only")
-        
+
         total_loss = 0.0
         correct = 0
         total = 0
         num_epochs = training_config.get('epochs', 5)
-        
-        # Setup AMP scaler only if use_amp is enabled (disabled for DP)
+
+        # AMP は DP 無効時のみ
         model_is_half = next(self.model.parameters()).dtype == torch.float16
         scaler = torch.amp.GradScaler('cuda') if (self.use_amp and torch.cuda.is_available() and not model_is_half) else None
-        
+
         for epoch in range(num_epochs):
             epoch_loss = 0.0
-            
-            # # Add progress bar for batches
-            pbar = tqdm(dataloader, 
-                       desc=f"Client {self.client_id} - Epoch {epoch+1}/{num_epochs}",
-                       leave=False,
-                       unit="batch")
-            
+            pbar = tqdm(dataloader,
+                        desc=f"Client {self.client_id} - Epoch {epoch+1}/{num_epochs}",
+                        leave=False, unit="batch")
+
             for batch_idx, (data, target) in enumerate(pbar):
                 data, target = data.to(self.device), target.to(self.device)
-                
-                # Convert input to half precision if model is half precision
                 if model_is_half:
                     data = data.half()
-                
-                # Handle Mixup/CutMix targets
-                if len(target.shape) > 1:  # One-hot encoded (from Mixup/CutMix)
+
+                # Mixup/CutMix の処理
+                if len(target.shape) > 1:
                     target_for_loss = target
                     target_for_acc = target.argmax(dim=1)
                 else:
                     target_for_loss = target
                     target_for_acc = target
-                
-                # Two-phase training for DP with manual noise injection
+
                 if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.privacy_engine_attached:
-                    # Clear gradients for both optimizers
+                    # --- DP-A + non-DP B/classifier ---
                     self.dp_optimizer.zero_grad()
                     self.local_optimizer.zero_grad()
-                    
-                    # Forward pass (AMP disabled for DP)
-                    with torch.amp.autocast('cuda', enabled=False):
-                        output = self.model(data)
-                    
-                    if len(target.shape) > 1:  # Mixup/CutMix loss
+
+                    # DP の場合は AMP を使わない
+                    output = self.model(data)
+                    if len(target.shape) > 1:
                         loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
                     else:
                         loss = F.cross_entropy(output, target_for_loss)
-                    
-                    # Backward pass - computes gradients for all parameters
+
                     loss.backward()
-                    
-                    # Manually apply DP to A parameters only
-                    with torch.no_grad():
-                        # Clip gradients for A parameters
-                        A_grads = []
-                        for p in self.A_params:
-                            if p.grad is not None:
-                                A_grads.append(p.grad.data.flatten())
-                        
-                        if A_grads:
-                            # Compute global norm for A parameters
-                            total_norm = torch.norm(torch.cat(A_grads))
-                            
-                            # Clip gradients
-                            clip_coef = min(1.0, self.dp_max_grad_norm / (total_norm + 1e-6))
-                            
-                            # Apply clipping and add noise to A parameters only
-                            for p in self.A_params:
-                                if p.grad is not None:
-                                    # Clip gradient
-                                    p.grad.data.mul_(clip_coef)
-                                    
-                                    # Add Gaussian noise (scaled by sensitivity and batch size)
-                                    noise_std = self.dp_noise_multiplier * self.dp_max_grad_norm / data.shape[0]
-                                    noise = torch.randn_like(p.grad) * noise_std
-                                    p.grad.data.add_(noise)
-                    
-                    # Update privacy accounting
-                    if hasattr(self, 'privacy_accountant'):
-                        sample_rate = data.shape[0] / self.local_data_size
-                        self.privacy_accountant.step(
-                            noise_multiplier=self.dp_noise_multiplier,
-                            sample_rate=sample_rate
-                        )
-                    
-                    # Step both optimizers with DP-protected A gradients
+
+                    # A は Opacus がノイズ注入＆クリップ＆会計
+                    self.dp_optimizer.step()
+                    # B + classifier は通常 SGD
+                    self.local_optimizer.step()
+
+                    # ε をログ
+                    delta = self.config.get('privacy', {}).get('delta', 1e-5)
+                    eps = self.privacy_engine.accountant.get_epsilon(delta=delta)
+                    print(f"Client {self.client_id}: ε={eps:.2f}, δ={delta}")
+
+                elif self.aggregation_method == 'fedsa_shareA_dp':
+                    # 非DP の場合（2 optimizer だがノイズなし）
+                    self.dp_optimizer.zero_grad()
+                    self.local_optimizer.zero_grad()
+
+                    with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
+                        output = self.model(data)
+                    if len(target.shape) > 1:
+                        loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
+                    else:
+                        loss = F.cross_entropy(output, target_for_loss)
+
+                    loss.backward()
                     self.dp_optimizer.step()
                     self.local_optimizer.step()
-                    
-                elif self.aggregation_method == 'fedsa_shareA_dp':
-                    # Non-DP training with two optimizers (before privacy engine attachment)
-                    # Clear gradients for both optimizers
-                    if hasattr(self, 'dp_optimizer'):
-                        self.dp_optimizer.zero_grad()
-                    if hasattr(self, 'local_optimizer'):
-                        self.local_optimizer.zero_grad()
-                    
-                    # Use autocast only if AMP is enabled
-                    with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
-                        output = self.model(data)
-                    
-                    if len(target.shape) > 1:  # Mixup/CutMix loss
-                        loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
-                    else:
-                        loss = F.cross_entropy(output, target_for_loss)
-                    
-                    if scaler is not None:
-                        # Use AMP scaler
-                        scaler.scale(loss).backward()
-                        if hasattr(self, 'dp_optimizer'):
-                            scaler.step(self.dp_optimizer)
-                        if hasattr(self, 'local_optimizer'):
-                            scaler.step(self.local_optimizer)
-                        scaler.update()
-                    else:
-                        # Standard training
-                        loss.backward()
-                        if hasattr(self, 'dp_optimizer'):
-                            self.dp_optimizer.step()
-                        if hasattr(self, 'local_optimizer'):
-                            self.local_optimizer.step()
-                    
+
                 else:
-                    # Standard single-optimizer training (fedsa mode)
-                    # Use autocast only if AMP is enabled
+                    # 標準 FedSA/FedAvg の場合（単一 optimizer）
+                    self.optimizer.zero_grad()
                     with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
                         output = self.model(data)
-                    
-                    if len(target.shape) > 1:  # Mixup/CutMix loss
+                    if len(target.shape) > 1:
                         loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
                     else:
                         loss = F.cross_entropy(output, target_for_loss)
-                    
-                    self.optimizer.zero_grad()
-                    
-                    if scaler is not None:
-                        # Use AMP scaler (only when DP is disabled)
-                        scaler.scale(loss).backward()
-                        scaler.step(self.optimizer)
-                        scaler.update()
-                    else:
-                        # Standard training
-                        loss.backward()
-                        self.optimizer.step()
-                
-                # Track metrics
+                    loss.backward()
+                    self.optimizer.step()
+
+                # --- metrics ---
                 epoch_loss += loss.item()
                 pred = output.argmax(dim=1, keepdim=True)
                 correct += pred.eq(target_for_acc.view_as(pred)).sum().item()
                 total += target_for_acc.size(0)
-                
-                # Update progress bar with current metrics
+
                 pbar.set_postfix({
                     'loss': f'{loss.item():.4f}',
                     'avg_loss': f'{epoch_loss/(batch_idx+1):.4f}',
                     'acc': f'{100.*correct/total:.2f}%'
                 })
-            
+
             total_loss += epoch_loss
-            
-            # Simple epoch completion message with loss info
-            if 'loss_accumulator' in locals() and epoch == 0:
-                # Show first epoch loss to check transfer learning
-                first_epoch_loss = loss_accumulator.item() / len(dataloader)
-                print(f"Client {self.client_id} - Epoch {epoch+1} completed (avg loss: {first_epoch_loss:.4f})")
-                
-                # Check if loss is too high (indicating poor initialization)
-                if first_epoch_loss > 5.0:
-                    print(f"  ⚠️  WARNING: High initial loss ({first_epoch_loss:.4f}) suggests pretrained weights may not be loaded!")
-            else:
-                print(f"Client {self.client_id} - Epoch {epoch+1} completed")
-        
+            print(f"Client {self.client_id} - Epoch {epoch+1} completed")
+
         avg_loss = total_loss / (num_epochs * len(dataloader))
         accuracy = 100. * correct / total
-        
-        # FedSA-LoRA: Only return A parameters
-        if self.aggregation_method in ['fedsa_shareA_dp', 'fedsa']:
-            # CRITICAL: Only return A parameters for FedSA - B matrices stay local!
-            
-            # Step 1: Get A parameter whitelist (safe keys only)
-            A_whitelist = set(self.model.get_A_parameters().keys())
-            all_A_params = self.model.get_A_parameters()
-            
-            # Step 2: Filter using whitelist (defense against future code changes)
-            safe_A_params = {k: v for k, v in all_A_params.items() if k in A_whitelist}
-            
-            # Step 3: Double safety check: ensure no B parameters are included
-            B_param_names = set(self.model.get_B_parameters().keys())
-            A_param_names = set(safe_A_params.keys())
-            leaked_B_params = A_param_names.intersection(B_param_names)
-            
-            if leaked_B_params:
-                raise ValueError(f"SECURITY ALERT: B parameters leaked in A upload: {leaked_B_params}")
-            
-            # Step 4: Verify all A parameters are accounted for
-            if len(safe_A_params) != len(A_whitelist):
-                missing = A_whitelist - A_param_names
-                raise ValueError(f"INTEGRITY ERROR: Missing A parameters: {missing}")
-            
-            # Step 5: Additional check - ensure classifier params are NOT in A_params (defense in depth)
-            cls_param_names = set()
-            for attr in ('classifier', 'fc', 'head'):
-                if hasattr(self.model, attr):
-                    cls_param_names |= {n for n, _ in getattr(self.model, attr).named_parameters()}
-            
-            if cls_param_names:  # Only check if we found classifier-like params
-                for a_key in safe_A_params.keys():
-                    for cls_name in cls_param_names:
-                        if cls_name in a_key or a_key.endswith(cls_name):
-                            raise ValueError(
-                                f"SECURITY ALERT: Classifier-like parameter '{cls_name}' detected in A_params upload"
-                            )
-            
-            update = {
-                'A_params': safe_A_params,  # Server expects 'A_params' key
-                'num_samples': self.local_data_size,  # Server expects 'num_samples' for weighted aggregation
-                'local_data_size': self.local_data_size,
-                'loss': avg_loss,
-                'accuracy': accuracy,
-                'upload_type': 'A_matrices_only',  # For verification
-                'param_count': len(safe_A_params),  # For verification
-                'param_names': list(safe_A_params.keys())  # For debugging
+
+        # --- FedSA 用: A だけ返す ---
+        update = {
+            'A_params': self.model.get_A_parameters(),
+            'num_samples': self.local_data_size,
+            'local_data_size': self.local_data_size,
+            'loss': avg_loss,
+            'accuracy': accuracy,
+            'upload_type': 'A_matrices_only'
+        }
+
+        if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.privacy_engine_attached:
+            delta = self.config.get('privacy', {}).get('delta', 1e-5)
+            epsilon = self.privacy_engine.accountant.get_epsilon(delta=delta)
+            update['privacy_analysis'] = {
+                'epsilon': epsilon,
+                'delta': delta,
+                'noise_multiplier': self.config['privacy'].get('noise_multiplier', 1.0),
+                'max_grad_norm': self.config['privacy'].get('max_grad_norm', 1.0),
+                'batch_size': self.config['data'].get('batch_size', 128),
+                'dataset_size': self.local_data_size,
+                'method': 'Opacus DP-SGD (A-only)'
             }
-            
-            # Add privacy tracking for DP mode
-            if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and hasattr(self, 'privacy_accountant'):
-                try:
-                    delta = self.config.get('privacy', {}).get('delta', 1e-5)
-                    # Get epsilon from manual accountant
-                    epsilon = self.privacy_accountant.get_epsilon(delta=delta)
-                    
-                    noise_multiplier = self.config.get('privacy', {}).get('noise_multiplier', 1.0)
-                    max_grad_norm = self.config.get('privacy', {}).get('max_grad_norm', 0.5)
-                    batch_size = self.config.get('data', {}).get('batch_size', 256)
-                    sample_rate = batch_size / self.local_data_size if self.local_data_size > 0 else 0
-                    
-                    update['privacy_spent'] = epsilon
-                    update['privacy_analysis'] = {
-                        'epsilon': epsilon,
-                        'delta': delta,
-                        'noise_multiplier': noise_multiplier,
-                        'max_grad_norm': max_grad_norm,
-                        'batch_size': batch_size,
-                        'sample_rate': sample_rate,
-                        'dataset_size': self.local_data_size,
-                        'method': 'Manual DP-SGD (A-only)'
-                    }
-                    update['privacy_note'] = 'DP applied to LoRA-A only; LoRA-B + classifier are local (non-DP)'
-                    
-                    print(f"Client {self.client_id}: Privacy ε={epsilon:.4f} (Manual A-only DP, δ={delta}, σ={noise_multiplier})")
-                except Exception as e:
-                    print(f"Client {self.client_id}: Could not compute privacy epsilon: {e}")
-                    update['privacy_spent'] = 0
-                    update['privacy_analysis'] = {'error': str(e)}
-            
-            print(f"Client {self.client_id}: Uploading {len(safe_A_params)} A matrices only (B kept local)")
-            
-            # NOTE: We don't reset optimizer states anymore because:
-            # 1. The copy_() method in set_A_parameters preserves parameter identity
-            # 2. This allows momentum to be maintained across rounds (which can help convergence)
-            # 3. Resetting state causes KeyError in the next round
-            # This applies to both standard and DP optimizers
-            
-        else:
-            raise ValueError(f"Unsupported aggregation method: {self.aggregation_method}. This script only supports 'fedsa' and 'fedsa_shareA_dp'.")
         
-        return update
+        return update    
     
     def update_model(self, global_params):
         """Update model with global A parameters (FedSA-LoRA)"""
