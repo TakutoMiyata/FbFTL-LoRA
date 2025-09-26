@@ -352,8 +352,8 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 if (self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and 
                     batch_idx % 10 == 9):
                     # Light cleanup of accumulated per-sample gradients
-                    if hasattr(self.dp_optimizer, 'grad_samples') and self.dp_optimizer.grad_samples:
-                        self.dp_optimizer.grad_samples = None
+                    # Note: grad_samples is a property in DPOptimizer, clear underlying grad_sample attributes
+                    safe_clear_grad_sample(self.model)
 
             total_loss += epoch_loss
             print(f"Client {self.client_id} - Epoch {epoch+1} completed")
@@ -362,10 +362,6 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp':
                 # Clear per-sample gradients accumulated during this epoch
                 safe_clear_grad_sample(self.model)
-                
-                # Clear DP optimizer's internal cache
-                if hasattr(self.dp_optimizer, 'grad_samples'):
-                    self.dp_optimizer.grad_samples = None
                 
                 # GPU memory cleanup every epoch for DP (memory intensive)
                 if torch.cuda.is_available():
@@ -380,10 +376,6 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
 
         # Comprehensive cleanup after training (memory efficiency)
         safe_clear_grad_sample(self.model)
-        
-        # Additional Opacus cleanup - clear optimizer's internal grad_sample cache
-        if hasattr(self, 'dp_optimizer') and hasattr(self.dp_optimizer, 'grad_samples'):
-            self.dp_optimizer.grad_samples = None
         
         # Clear any remaining per-sample gradient artifacts
         comprehensive_grad_sample_cleanup(self.model, verbose=False)
