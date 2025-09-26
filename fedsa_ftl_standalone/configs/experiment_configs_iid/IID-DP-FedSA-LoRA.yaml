@@ -72,7 +72,7 @@ experiment:
 federated:
   aggregation_method: fedsa_shareA_dp
   checkpoint_freq: 25
-  client_fraction: 0.3
+  client_fraction: 0.5
   num_clients: 10
   num_rounds: 100
   exclude_bn_from_agg: true
