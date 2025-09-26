@@ -39,19 +39,6 @@ except ImportError:
     clear_grad_sample = None
     print("Warning: Opacus not available. Install with: pip install opacus")
 
-class LoRAAModule(torch.nn.Module):
-    """
-    Dummy wrapper for LoRA A parameters.
-    Used only to let Opacus compute per-sample gradients for A.
-    Forward is a dummy, since the actual forward is done in the main model.
-    """
-    def __init__(self, A_params):
-        super().__init__()
-        self.A = torch.nn.ParameterList(A_params)
-
-    def forward(self, x=None):
-        # Dummy forward (Opacus requires a forward, but we only need grad_sample)
-        return torch.tensor(0.0, device=self.A[0].device, requires_grad=True)
 
 def manual_clear_grad_sample(model):
     """
@@ -199,9 +186,8 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
 
             self.local_params = self.B_params + cls_params
 
-            # --- NEW: wrap A-only module for Opacus ---
-            self.lora_A_module = LoRAAModule(self.A_params)
-            self.dp_optimizer = torch.optim.SGD(self.lora_A_module.parameters(), **opt_kwargs)
+            # Create optimizers for A-only and B+classifier
+            self.dp_optimizer = torch.optim.SGD(self.A_params, **opt_kwargs)
             self.local_optimizer = torch.optim.SGD(self.local_params, **opt_kwargs)
 
             if OPACUS_AVAILABLE:
@@ -247,21 +233,19 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         # Attach Opacus privacy engine on first training call (now we have dataloader)
         if (self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and 
             hasattr(self, 'privacy_engine') and not self.privacy_engine_attached):
-            # Create a dummy dataloader for Opacus (it needs batch_size info)
-            # We'll use the actual batch size from the provided dataloader
-            batch_size = dataloader.batch_size
-            
-            # Make the LoRA A module private
-            self.lora_A_module, self.dp_optimizer, self.dataloader = self.privacy_engine.make_private(
-                module=self.lora_A_module,
-                optimizer=self.dp_optimizer,
-                data_loader=dataloader,  # Pass the actual dataloader
+            # Make the entire model private, but only A parameters will be modified by DP optimizer
+            self.model, self.dp_optimizer, _ = self.privacy_engine.make_private(
+                module=self.model,  # Pass the entire model to Opacus for proper hook attachment
+                optimizer=self.dp_optimizer,  # A-only optimizer
+                data_loader=dataloader,
                 noise_multiplier=self.dp_noise_multiplier,
                 max_grad_norm=self.dp_max_grad_norm,
-                poisson_sampling=False  # Use uniform sampling for simplicity
+                poisson_sampling=False
             )
+            # Note: We ignore the returned dataloader and use the original one to avoid confusion
             self.privacy_engine_attached = True
-            print(f"Client {self.client_id}: Opacus attached to A-only module with batch_size={batch_size}")
+            print(f"Client {self.client_id}: Opacus attached to model with A-only optimizer (batch_size={dataloader.batch_size})")
+            print(f"  Note: Using original dataloader, ignoring Opacus-wrapped dataloader")
 
         total_loss = 0.0
         correct = 0
@@ -388,6 +372,10 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
             self.model.set_A_parameters(global_params['A_params'])
             print(f"Client {self.client_id}: Updated A matrices from server")
             
+            # Note: self.model.set_A_parameters() uses copy_() which preserves parameter identity
+            # This means optimizer state (momentum, etc.) is maintained across rounds
+            # No need to reset optimizer state here
+            
             # NOTE: We don't need to reset optimizer state here because:
             # 1. The copy_() method in set_A_parameters preserves parameter identity
             # 2. This allows momentum to be maintained across rounds
@@ -395,8 +383,9 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
     
     def reset_A_optimizer_state(self):
         """Reset optimizer state for A parameters after server update"""
-        # No-op: using single SGD as dp_optimizer (not DPFedSAOptimizer)
-        # State preservation is handled by parameter identity preservation in set_A_parameters
+        # No-op: State preservation is handled by parameter identity preservation in set_A_parameters
+        # The copy_() method in set_A_parameters preserves parameter identity,
+        # allowing momentum and other optimizer states to continue across rounds
         pass
     
     def get_model_size(self):
