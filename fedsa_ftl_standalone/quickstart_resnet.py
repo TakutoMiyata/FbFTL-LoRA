@@ -206,15 +206,11 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
 
             if OPACUS_AVAILABLE:
                 self.privacy_engine = PrivacyEngine()
-                self.lora_A_module, self.dp_optimizer, _ = self.privacy_engine.make_private(
-                    module=self.lora_A_module,
-                    optimizer=self.dp_optimizer,
-                    data_loader=None,  # We'll pass sample_rate manually
-                    noise_multiplier=config.get('privacy', {}).get('noise_multiplier', 1.0),
-                    max_grad_norm=config.get('privacy', {}).get('max_grad_norm', 1.0),
-                )
-                self.privacy_engine_attached = True
-                print(f"Client {client_id}: Opacus attached to A-only module")
+                # Store privacy config but don't call make_private yet (need dataloader)
+                self.dp_noise_multiplier = config.get('privacy', {}).get('noise_multiplier', 1.0)
+                self.dp_max_grad_norm = config.get('privacy', {}).get('max_grad_norm', 1.0)
+                self.privacy_engine_attached = False  # Will attach during first train() call
+                print(f"Client {client_id}: Opacus initialized, will attach during training")
             else:
                 raise RuntimeError("Opacus not available")
             
@@ -247,6 +243,25 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         """Train the model with A-only DP-SGD (via Opacus) and non-DP B+classifier"""
         self.model.train()
         self.local_data_size = len(dataloader.dataset)
+        
+        # Attach Opacus privacy engine on first training call (now we have dataloader)
+        if (self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and 
+            hasattr(self, 'privacy_engine') and not self.privacy_engine_attached):
+            # Create a dummy dataloader for Opacus (it needs batch_size info)
+            # We'll use the actual batch size from the provided dataloader
+            batch_size = dataloader.batch_size
+            
+            # Make the LoRA A module private
+            self.lora_A_module, self.dp_optimizer, self.dataloader = self.privacy_engine.make_private(
+                module=self.lora_A_module,
+                optimizer=self.dp_optimizer,
+                data_loader=dataloader,  # Pass the actual dataloader
+                noise_multiplier=self.dp_noise_multiplier,
+                max_grad_norm=self.dp_max_grad_norm,
+                poisson_sampling=False  # Use uniform sampling for simplicity
+            )
+            self.privacy_engine_attached = True
+            print(f"Client {self.client_id}: Opacus attached to A-only module with batch_size={batch_size}")
 
         total_loss = 0.0
         correct = 0
@@ -294,11 +309,6 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     self.dp_optimizer.step()
                     # B + classifier は通常 SGD
                     self.local_optimizer.step()
-
-                    # ε をログ
-                    delta = self.config.get('privacy', {}).get('delta', 1e-5)
-                    eps = self.privacy_engine.accountant.get_epsilon(delta=delta)
-                    print(f"Client {self.client_id}: ε={eps:.2f}, δ={delta}")
 
                 elif self.aggregation_method == 'fedsa_shareA_dp':
                     # 非DP の場合（2 optimizer だがノイズなし）
