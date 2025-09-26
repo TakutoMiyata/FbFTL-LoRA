@@ -94,7 +94,7 @@ def comprehensive_grad_sample_cleanup(model, verbose=False):
                 print(f"  Cleared grad_sample from parameter: {name}")
         
         # Also clear other potential Opacus attributes
-        opacus_attrs = ['_forward_hooks', '_backward_hooks', '_grad_sample']
+        opacus_attrs = ['_forward_hooks', '_backward_hooks', '_grad_sample', 'summed_grad']
         for attr in opacus_attrs:
             if hasattr(param, attr):
                 try:
@@ -112,7 +112,11 @@ def comprehensive_grad_sample_cleanup(model, verbose=False):
             if verbose:
                 print(f"  Cleared grad_sample from buffer: {name}")
     
-    if cleared_params > 0 or cleared_buffers > 0:
+    # Force garbage collection after cleanup
+    import gc
+    gc.collect()
+    
+    if verbose and (cleared_params > 0 or cleared_buffers > 0):
         print(f"🧹 Comprehensive cleanup: {cleared_params} params, {cleared_buffers} buffers")
 
 # Load environment variables from .env file
@@ -343,15 +347,46 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     'avg_loss': f'{epoch_loss/(batch_idx+1):.4f}',
                     'acc': f'{100.*correct/total:.2f}%'
                 })
+                
+                # Batch-level cleanup for DP mode (every 10 batches to balance performance)
+                if (self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and 
+                    batch_idx % 10 == 9):
+                    # Light cleanup of accumulated per-sample gradients
+                    if hasattr(self.dp_optimizer, 'grad_samples') and self.dp_optimizer.grad_samples:
+                        self.dp_optimizer.grad_samples = None
 
             total_loss += epoch_loss
             print(f"Client {self.client_id} - Epoch {epoch+1} completed")
+            
+            # Epoch-level memory cleanup (especially important for DP mode)
+            if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp':
+                # Clear per-sample gradients accumulated during this epoch
+                safe_clear_grad_sample(self.model)
+                
+                # Clear DP optimizer's internal cache
+                if hasattr(self.dp_optimizer, 'grad_samples'):
+                    self.dp_optimizer.grad_samples = None
+                
+                # GPU memory cleanup every epoch for DP (memory intensive)
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            else:
+                # For non-DP modes, lighter cleanup every other epoch
+                if epoch % 2 == 1 and torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
         avg_loss = total_loss / (num_epochs * len(dataloader))
         accuracy = 100. * correct / total
 
-        # Clean up per-sample gradients after training (memory efficiency)
+        # Comprehensive cleanup after training (memory efficiency)
         safe_clear_grad_sample(self.model)
+        
+        # Additional Opacus cleanup - clear optimizer's internal grad_sample cache
+        if hasattr(self, 'dp_optimizer') and hasattr(self.dp_optimizer, 'grad_samples'):
+            self.dp_optimizer.grad_samples = None
+        
+        # Clear any remaining per-sample gradient artifacts
+        comprehensive_grad_sample_cleanup(self.model, verbose=False)
         
         # --- FedSA 用: A だけ返す ---
         update = {
@@ -843,6 +878,15 @@ def main():
             
             print(f"  Client {client_id}: Loss={client_result['loss']:.4f}, "
                   f"Accuracy={client_result['accuracy']:.2f}%")
+            
+            # Per-client cleanup to prevent memory accumulation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                # Log GPU memory if needed for debugging
+                if (round_idx + 1) % 10 == 0:  # Every 10 rounds
+                    allocated = torch.cuda.memory_allocated() / 1024**3  # GB
+                    cached = torch.cuda.memory_reserved() / 1024**3  # GB
+                    print(f"    GPU Memory: {allocated:.2f}GB allocated, {cached:.2f}GB cached")
         
         # Evaluation
         is_eval_round = (round_idx + 1) % config.get('evaluation', {}).get('eval_freq', 5) == 0
@@ -903,6 +947,27 @@ def main():
         
         # Log aggregation info
         WeightedFedAvg.log_aggregation_info(client_sample_counts, len(aggregated_A))
+        
+        # Round-level cleanup to prevent memory leaks
+        if round_idx % 5 == 0:  # Every 5 rounds
+            # Clear GPU cache
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+            # Additional cleanup for all clients
+            for client in clients:
+                comprehensive_grad_sample_cleanup(client.model, verbose=False)
+            
+            if (round_idx + 1) % 10 == 0:  # Every 10 rounds, show memory info
+                print(f"  🧹 Memory cleanup completed (Round {round_idx + 1})")
+                if torch.cuda.is_available():
+                    allocated = torch.cuda.memory_allocated() / 1024**3
+                    cached = torch.cuda.memory_reserved() / 1024**3
+                    print(f"  GPU Memory after cleanup: {allocated:.2f}GB allocated, {cached:.2f}GB cached")
         
         # Calculate communication cost (only A matrices, dtype-aware)
         def get_bytes_per_param(tensor):
