@@ -1,0 +1,78 @@
+seed: 42
+use_gpu: true
+data:
+  dataset_name: cifar100
+  data_dir: ./data
+  num_clients: 10
+  data_split: non_iid
+  alpha: 0.5
+  batch_size: 64
+  num_workers: 4
+  model_type: imagenet
+  imagenet_style: true
+  input_size: 224
+  verbose: false
+  augmentations:
+    horizontal_flip:
+      enabled: true
+      prob: 0.5
+    random_rotation:
+      enabled: true
+      degrees: 10
+    color_jitter:
+      enabled: false
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.1
+    random_crop:
+      enabled: false
+      padding: 4
+    random_resized_crop:
+      enabled: true
+      scale_min: 0.5
+    random_erasing:
+      enabled: false
+      prob: 0.5
+    mixup:
+      enabled: false
+      alpha: 0.2
+      prob: 0.5
+    cutmix:
+      enabled: false
+      alpha: 1.0
+      prob: 0.5
+model:
+  model_name: mobilenet_v2
+  num_classes: 100
+  pretrained: true
+  freeze_backbone: true
+  lora:
+    enabled: true
+    r: 8
+    alpha: 16
+    dropout: 0.1
+training:
+  epochs: 5
+  lr: 0.001
+  momentum: 0.9
+  weight_decay: 0.0001
+  scheduler: cosine
+federated:
+  num_rounds: 100
+  num_clients: 10
+  client_fraction: 1.0
+  aggregation_method: fedsa
+  checkpoint_freq: 20
+privacy:
+  enable_privacy: false
+  epsilon: 10.0
+  delta: 1.0e-05
+  max_grad_norm: 0.5
+evaluation:
+  eval_freq: 5
+experiment:
+  name: MobileNetV2_CIFAR100_NonIID_Transfer
+  output_dir: experiments/quickstart_resnet
+reproducibility:
+  deterministic: false
