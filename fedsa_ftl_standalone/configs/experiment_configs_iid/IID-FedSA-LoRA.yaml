@@ -98,7 +98,7 @@ reproducibility:
   deterministic: false
 seed: 42
 training:
-  epochs: 3
+  epochs: 2
   lr: 0.003  # Increased for faster convergence with LoRA and new classifier
   weight_decay: 0.0003  # Reduced to allow better learning
   scheduler: cosine

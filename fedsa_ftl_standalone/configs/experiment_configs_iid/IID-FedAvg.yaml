@@ -74,7 +74,7 @@ experiment:
 federated:
   aggregation_method: fedavg
   checkpoint_freq: 25
-  client_fraction: 1.0
+  client_fraction: 0.3
   num_clients: 10
   num_rounds: 100
   exclude_bn_from_agg: true
@@ -105,7 +105,7 @@ reproducibility:
 seed: 42
 
 training:
-  epochs: 3
+  epochs: 2
   lr: 0.005  # Scaled with larger batch size (256)
   weight_decay: 0.002
   scheduler: cosine
