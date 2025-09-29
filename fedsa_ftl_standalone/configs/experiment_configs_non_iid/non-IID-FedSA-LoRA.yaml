@@ -4,7 +4,7 @@ advanced:
   - classifier
   - lora_B
   personalized: true
-  server_lr: 1.0
+  server_lr: 0.5
   server_momentum: 0.9
   use_fbftl: false
 communication:
@@ -15,7 +15,7 @@ data:
   alpha: 0.5
   dataset_name: cifar100
   data_split: non_iid
-  input_size: 224
+  input_size: 160
   imagenet_style: true
   batch_size: 128
   data_dir: ./data
@@ -62,8 +62,8 @@ evaluation:
   save_best_model: true
 experiment:
   log_interval: 10
-  name: FedSA_LoRA_MobileNetV2_CIFAR100_IID
-  output_dir: experiments/quickstart_resnet_iid
+  name: FedSA_LoRA_MobileNetV2_CIFAR100_non_IID
+  output_dir: experiments/quickstart_resnet_non_iid
   save_history: true
   save_model: true
   use_wandb: false
@@ -99,8 +99,8 @@ reproducibility:
 seed: 42
 training:
   epochs: 2
-  lr: 0.003  # Increased for faster convergence with LoRA and new classifier
-  weight_decay: 0.0003  # Reduced to allow better learning
+  lr: 0.001  # Increased for faster convergence with LoRA and new classifier
+  weight_decay: 0.001  # Reduced to allow better learning
   scheduler: cosine
   warmup_epochs: 0
   label_smoothing: 0.1

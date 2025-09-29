@@ -16,7 +16,7 @@ data:
   alpha: 0.5
   dataset_name: cifar100
   data_split: iid
-  input_size: 224
+  input_size: 160
   imagenet_style: true
   batch_size: 256  # Further optimized for TITAN V (12GB VRAM)
   data_dir: ./data

@@ -372,7 +372,7 @@ def main():
     # Configure data transforms based on model type
     use_imagenet_style = config['data'].get('imagenet_style', False)
     if use_imagenet_style:
-        print("Using ImageNet-style transforms (224x224)")
+        print("Using ImageNet-style transforms (160x160)")
         config['data']['model_type'] = 'imagenet'
         config['data']['use_cifar_resnet'] = False
     else:
