@@ -4,7 +4,7 @@ advanced:
   - classifier
   - lora_B
   personalized: true
-  server_lr: 0.5
+  server_lr: 1.0
   server_momentum: 0.9
   use_fbftl: false
 communication:
@@ -12,7 +12,7 @@ communication:
   compression_ratio: 0.1
   quantization_bits: null
 data:
-  alpha: 0.5
+  alpha: 10.0
   dataset_name: cifar100
   data_split: non_iid
   input_size: 160
