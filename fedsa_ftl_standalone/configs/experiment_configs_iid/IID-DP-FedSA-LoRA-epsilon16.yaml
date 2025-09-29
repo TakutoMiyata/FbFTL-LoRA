@@ -63,7 +63,7 @@ evaluation:
 experiment:
   log_interval: 10
   name: FedSA_LoRA_MobileNetV2_CIFAR100_IID
-  output_dir: experiments/quickstart_resnet_iid
+  output_dir: experiments/quickstart_resnet_iid/epsilon16
   save_history: true
   save_model: true
   use_wandb: false
@@ -101,7 +101,7 @@ reproducibility:
   deterministic: false
 seed: 42
 training:
-  epochs: 1
+  epochs: 2
   lr: 0.001  # Scaled with larger batch size (256)
   weight_decay: 0.001
   scheduler: cosine

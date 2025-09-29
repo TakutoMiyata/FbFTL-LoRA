@@ -14,7 +14,7 @@ communication:
 data:
   alpha: 0.5
   dataset_name: cifar100
-  data_split: iid
+  data_split: non_iid
   input_size: 160
   imagenet_style: true
   batch_size: 128
@@ -63,7 +63,7 @@ evaluation:
 experiment:
   log_interval: 10
   name: FedSA_LoRA_MobileNetV2_CIFAR100_IID
-  output_dir: experiments/quickstart_resnet_iid/epsilon8
+  output_dir: experiments/quickstart_resnet_iid/epsilon4
   save_history: true
   save_model: true
   use_wandb: false
@@ -89,11 +89,11 @@ model:
 privacy:
   delta: 1.0e-05
   enable_privacy: true
-  epsilon: 8.0
+  epsilon: 4.0
   max_grad_norm: 1.0
   # noise_multiplier: 2.8   # ε≈2 を狙う
-  # noise_multiplier: 1.4 # ε≈4 を狙う
-  noise_multiplier: 0.9 # ε≈8 を狙う
+  noise_multiplier: 2.0 # ε≈4 を狙う
+  # noise_multiplier: 0.7 # ε≈8 を狙う
   # noise_multiplier: 0.35# ε≈16 を狙う
   target: lora_A
   use_opacus_accounting: true

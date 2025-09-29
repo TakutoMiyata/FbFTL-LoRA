@@ -63,7 +63,7 @@ evaluation:
 experiment:
   log_interval: 10
   name: FedSA_LoRA_MobileNetV2_CIFAR100_IID
-  output_dir: experiments/quickstart_resnet_iid
+  output_dir: experiments/quickstart_resnet_iid/epsilon4
   save_history: true
   save_model: true
   use_wandb: false
@@ -92,7 +92,7 @@ privacy:
   epsilon: 4.0
   max_grad_norm: 1.0
   # noise_multiplier: 2.8   # ε≈2 を狙う
-  noise_multiplier: 1.3 # ε≈4 を狙う
+  noise_multiplier: 2.0 # ε≈4 を狙う
   # noise_multiplier: 0.7 # ε≈8 を狙う
   # noise_multiplier: 0.35# ε≈16 を狙う
   target: lora_A
@@ -101,7 +101,7 @@ reproducibility:
   deterministic: false
 seed: 42
 training:
-  epochs: 1
+  epochs: 2
   lr: 0.001  # Scaled with larger batch size (256)
   weight_decay: 0.001
   scheduler: cosine

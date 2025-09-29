@@ -63,7 +63,7 @@ evaluation:
 experiment:
   log_interval: 10
   name: FedSA_LoRA_MobileNetV2_CIFAR100_IID
-  output_dir: experiments/quickstart_resnet_iid
+  output_dir: experiments/quickstart_resnet_iid/epsilon2
   save_history: true
   save_model: true
   use_wandb: false
