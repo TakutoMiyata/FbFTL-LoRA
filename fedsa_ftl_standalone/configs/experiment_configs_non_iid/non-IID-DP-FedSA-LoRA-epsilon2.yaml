@@ -15,7 +15,7 @@ data:
   alpha: 10.0
   dataset_name: cifar100
   data_split: non_iid
-  input_size: 160
+  input_size: 224
   imagenet_style: true
   batch_size: 128
   data_dir: ./data
