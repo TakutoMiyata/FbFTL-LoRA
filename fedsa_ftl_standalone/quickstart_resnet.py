@@ -504,7 +504,7 @@ def main():
                 'num_workers': 4,
                 'model_type': 'imagenet',  # Use ImageNet model for transfer learning
                 'imagenet_style': True,  # Enable ImageNet-style preprocessing
-                'input_size': 160,  # ImageNet input size
+                'input_size': 224,  # ImageNet input size
                 'verbose': False,
                 'augmentations': {
                     'horizontal_flip': {'enabled': True, 'prob': 0.5},
@@ -642,7 +642,7 @@ def main():
     # Configure data transforms based on model type
     use_imagenet_style = config['data'].get('imagenet_style', False)
     if use_imagenet_style:
-        print("Using ImageNet-style transforms (160x160)")
+        print("Using ImageNet-style transforms (224x224)")
         config['data']['model_type'] = 'imagenet'
         config['data']['use_cifar_resnet'] = False
     else:

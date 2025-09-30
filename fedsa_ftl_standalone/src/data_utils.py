@@ -18,11 +18,11 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
-def build_imagenet_transforms(input_size=160, augment=True):
+def build_imagenet_transforms(input_size=224, augment=True):
     """Build ImageNet-style transforms for transfer learning
     
     Args:
-        input_size: Target input size (default: 160)
+        input_size: Target input size (default: 224)
         augment: Whether to apply data augmentation for training
     
     Returns:
@@ -37,14 +37,14 @@ def build_imagenet_transforms(input_size=160, augment=True):
         ])
     else:
         train = T.Compose([
-            T.Resize(int(input_size * 256 / 160)),
+            T.Resize(int(input_size * 256 / 224)),
             T.CenterCrop(input_size),
             T.ToTensor(),
             T.Normalize(IMAGENET_MEAN, IMAGENET_STD),
         ])
     
     test = T.Compose([
-        T.Resize(int(input_size * 256 / 160)),
+        T.Resize(int(input_size * 256 / 224)),
         T.CenterCrop(input_size),
         T.ToTensor(),
         T.Normalize(IMAGENET_MEAN, IMAGENET_STD),
@@ -53,7 +53,7 @@ def build_imagenet_transforms(input_size=160, augment=True):
     return train, test
 
 
-def get_cifar_transforms(model_type='vgg', augmentation_config=None, use_cifar_resnet=False, input_size: int = 160):
+def get_cifar_transforms(model_type='vgg', augmentation_config=None, use_cifar_resnet=False):
     """Get CIFAR data transforms based on model type with enhanced augmentation
     
     Args:
@@ -73,8 +73,8 @@ def get_cifar_transforms(model_type='vgg', augmentation_config=None, use_cifar_r
         # CIFAR-optimized ResNet uses native 32x32 resolution
         pass  # No resize needed
     else:
-        # ImageNet-pretrained models need a larger resolution; use provided input_size
-        train_transforms.append(transforms.Resize((input_size, input_size)))
+        # ImageNet-pretrained models need 224x224
+        train_transforms.append(transforms.Resize((224, 224)))
     
     # Random Crop with padding (if enabled)
     if augmentation_config.get('random_crop', {}).get('enabled', False):
@@ -85,9 +85,9 @@ def get_cifar_transforms(model_type='vgg', augmentation_config=None, use_cifar_r
                 transforms.RandomCrop(32, padding=crop_config.get('padding', 4))
             )
         else:
-            # For ImageNet models, crop at target input_size
+            # For ImageNet models, crop at 224x224
             train_transforms.append(
-                transforms.RandomCrop(input_size, padding=crop_config.get('padding', 4))
+                transforms.RandomCrop(224, padding=crop_config.get('padding', 4))
             )
     
     # Horizontal Flip
@@ -146,9 +146,9 @@ def get_cifar_transforms(model_type='vgg', augmentation_config=None, use_cifar_r
             transforms.Normalize(mean=[0.507, 0.487, 0.441], std=[0.267, 0.256, 0.276])
         ])
     else:
-        # ImageNet-style models: resize to target input_size
+        # ImageNet models: resize to 224x224
         transform_test = transforms.Compose([
-            transforms.Resize((input_size, input_size)),
+            transforms.Resize((224, 224)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.507, 0.487, 0.441], std=[0.267, 0.256, 0.276])
         ])
@@ -258,8 +258,7 @@ class MixupCutmixCollate:
         self.training = mode
 
 
-def load_cifar_data(dataset_name='cifar100', data_dir='./data', model_type='vgg', augmentation_config=None,
-                    use_cifar_resnet=False, imagenet_style=False, input_size=160):
+def load_cifar_data(dataset_name='cifar100', data_dir='./data', model_type='vgg', augmentation_config=None, use_cifar_resnet=False, imagenet_style=False, input_size=224):
     """Load CIFAR dataset with augmentation support
     
     Args:
@@ -276,8 +275,8 @@ def load_cifar_data(dataset_name='cifar100', data_dir='./data', model_type='vgg'
         augment = augmentation_config is not None and len(augmentation_config) > 0
         transform_train, transform_test = build_imagenet_transforms(input_size, augment)
     else:
-        # Use CIFAR or ImageNet-size aware transforms (input_size passed through)
-        transform_train, transform_test = get_cifar_transforms(model_type, augmentation_config, use_cifar_resnet, input_size=input_size)
+        # Use CIFAR-optimized transforms
+        transform_train, transform_test = get_cifar_transforms(model_type, augmentation_config, use_cifar_resnet)
     
     if dataset_name.lower() == 'cifar100':
         trainset = torchvision.datasets.CIFAR100(
@@ -464,7 +463,7 @@ def prepare_federated_data(config: Dict):
     augmentation_config = config.get('augmentations', {})
     use_cifar_resnet = config.get('use_cifar_resnet', False)
     imagenet_style = config.get('imagenet_style', False)  # Get ImageNet style flag
-    input_size = config.get('input_size', 160)
+    input_size = config.get('input_size', 224)
     
     trainset, testset = load_cifar_data(
         dataset_name, 

@@ -15,7 +15,7 @@ data:
   alpha: 0.5
   dataset_name: cifar100
   data_split: iid
-  input_size: 160
+  input_size: 224
   imagenet_style: true
   batch_size: 128
   data_dir: ./data
@@ -102,8 +102,8 @@ reproducibility:
 seed: 42
 training:
   epochs: 2
-  lr: 0.0005  # Scaled with larger batch size (256)
-  weight_decay: 0.001
+  lr: 0.00075  # Scaled with larger batch size (256)
+  weight_decay: 0.0005
   scheduler: cosine
   warmup_epochs: 0
   label_smoothing: 0.1

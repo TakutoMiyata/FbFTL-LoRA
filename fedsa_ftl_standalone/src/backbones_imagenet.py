@@ -346,7 +346,7 @@ def print_model_summary(config: Dict[str, Any], model: nn.Module):
     info = get_model_info(model)
     
     print("📊 Model Summary:")
-    print(f"  Input size: {data_config.get('input_size', 160)}")
+    print(f"  Input size: {data_config.get('input_size', 224)}")
     print(f"  Pretrained: {model_config.get('pretrained', True)}")
     print(f"  Backbone: {model_config.get('model_name', 'unknown')}")
     print(f"  LoRA enabled: {model_config.get('lora', {}).get('enabled', False)}")

@@ -99,8 +99,8 @@ reproducibility:
 seed: 42
 training:
   epochs: 2
-  lr: 0.0005  # Increased for faster convergence with LoRA and new classifier
-  weight_decay: 0.001  # Reduced to allow better learning
+  lr: 0.00075  # Increased for faster convergence with LoRA and new classifier
+  weight_decay: 0.0005  # Reduced to allow better learning
   scheduler: cosine
   warmup_epochs: 0
   label_smoothing: 0.1
