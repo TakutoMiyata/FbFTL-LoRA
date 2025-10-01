@@ -332,10 +332,72 @@ GPU 2 (NVIDIA RTX 3090): 96% util, 8234MB / 24576MB
 ```
 
 ### `stop_sweep.sh`
-実行中の sweep を停止
+実行中の sweep を停止（子プロセスも含む）
 
 ```bash
 ./stop_sweep.sh
+```
+
+自動的に親プロセスと子プロセスを停止します。
+
+### `kill_all_sweeps.sh`
+全ての sweep 関連プロセスを強制停止
+
+```bash
+./kill_all_sweeps.sh
+```
+
+`stop_sweep.sh`で止まらない場合や、直接実行したプロセスを停止する場合に使用。
+
+## 手動でプロセスを停止する方法
+
+### 方法1: プロセスグループごと停止（推奨）
+
+```bash
+# 全ての sweep 関連プロセスを検索
+ps aux | grep "hyperparameter\|quickstart_resnet.py.*experiments"
+
+# パターンマッチで一括停止
+pkill -f "run_hyperparameter_sweep"
+pkill -f "quickstart_resnet.py.*experiments/hyperparameter"
+
+# 強制停止が必要な場合
+pkill -9 -f "run_hyperparameter_sweep"
+pkill -9 -f "quickstart_resnet.py.*experiments/hyperparameter"
+```
+
+### 方法2: 個別PIDで停止
+
+```bash
+# プロセス一覧を確認
+ps aux | grep python
+
+# 親プロセスのPIDを確認（例: 1108717）
+PARENT_PID=1108717
+
+# 子プロセスを検索
+pgrep -P $PARENT_PID
+
+# 親と子をまとめて停止
+kill $PARENT_PID
+pkill -P $PARENT_PID
+
+# 強制停止が必要な場合
+kill -9 $PARENT_PID
+pkill -9 -P $PARENT_PID
+```
+
+### 方法3: 全てのPythonプロセスを確認して個別停止
+
+```bash
+# 実行中のPythonプロセスを表示
+ps u | grep python
+
+# 個別に停止（PIDを指定）
+kill 1108724 1108725 1108726
+
+# 強制停止
+kill -9 1108724 1108725 1108726
 ```
 
 ## よくある質問
@@ -347,10 +409,16 @@ A: `./run_sweep_nohup.sh` を使用してください。
 A: `./check_sweep_status.sh` または `tail -f logs/sweep/sweep_*.log` を使用。
 
 ### Q: 実験を途中で止めたい
-A: `./stop_sweep.sh` または手動で `kill <PID>` を実行。
+A: `./stop_sweep.sh`（子プロセスも含めて停止）または `./kill_all_sweeps.sh`（強制停止）を実行。
+
+### Q: stop_sweep.sh で止まらない
+A: `./kill_all_sweeps.sh` を使用するか、手動で `pkill -f "hyperparameter_sweep"` を実行。
+
+### Q: 直接実行したプロセスを止めたい
+A: `./kill_all_sweeps.sh` を使用。PIDファイルがなくてもプロセスを検索して停止します。
 
 ### Q: 並列実行で GPU 数を制限したい
-A: `run_hyperparameter_sweep_parallel.py` の `NUM_PARALLEL_JOBS = 2` を編集。
+A: `run_hyperparameter_sweep_parallel.py` の `NUM_PARALLEL_JOBS = 2` を編集。`None` で自動検出。
 
 ### Q: 実験が失敗した組み合わせだけを再実行したい
 A: `sweep_summary.json` を確認して、失敗した実験の設定を抽出し、新しいスクリプトを作成。
