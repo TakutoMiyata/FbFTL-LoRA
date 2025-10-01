@@ -14,7 +14,7 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 if [ "$MODE" = "parallel" ]; then
     echo "Starting PARALLEL hyperparameter sweep in background..."
     echo "Log file: logs/sweep/sweep_parallel_${TIMESTAMP}.log"
-    nohup python -u run_hyperparameter_sweep_parallel.py > logs/sweep/sweep_parallel_${TIMESTAMP}.log 2>&1 &
+    nohup python -u run_hyperparameter_sweep_parallel.py --yes > logs/sweep/sweep_parallel_${TIMESTAMP}.log 2>&1 &
     SWEEP_PID=$!
     echo "Sweep started with PID: $SWEEP_PID"
     echo $SWEEP_PID > logs/sweep/sweep_parallel.pid
@@ -24,7 +24,7 @@ if [ "$MODE" = "parallel" ]; then
 elif [ "$MODE" = "sequential" ]; then
     echo "Starting SEQUENTIAL hyperparameter sweep in background..."
     echo "Log file: logs/sweep/sweep_sequential_${TIMESTAMP}.log"
-    nohup python -u run_hyperparameter_sweep.py > logs/sweep/sweep_sequential_${TIMESTAMP}.log 2>&1 &
+    nohup python -u run_hyperparameter_sweep.py --yes > logs/sweep/sweep_sequential_${TIMESTAMP}.log 2>&1 &
     SWEEP_PID=$!
     echo "Sweep started with PID: $SWEEP_PID"
     echo $SWEEP_PID > logs/sweep/sweep_sequential.pid

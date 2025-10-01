@@ -16,6 +16,7 @@ from pathlib import Path
 from datetime import datetime
 import json
 import time
+import argparse
 
 # Hyperparameter grid
 ALPHA_VALUES = [0.1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -114,6 +115,14 @@ def run_experiment(config_path, rounds=None, log_file=None):
 
 
 def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='Sequential Hyperparameter Sweep for FedSA-LoRA')
+    parser.add_argument('--yes', '-y', action='store_true', 
+                       help='Skip confirmation prompt (useful for nohup/background execution)')
+    parser.add_argument('--rounds', type=int, default=None,
+                       help='Override number of rounds per experiment')
+    args = parser.parse_args()
+    
     print("=" * 80)
     print("FedSA-LoRA Hyperparameter Sweep")
     print("=" * 80)
@@ -156,11 +165,20 @@ def main():
         'experiments': []
     }
     
-    # Confirm before starting
-    response = input(f"\nReady to run {total_experiments} experiments. Continue? (yes/no): ")
-    if response.lower() not in ['yes', 'y']:
-        print("Sweep cancelled.")
-        sys.exit(0)
+    # Confirm before starting (skip if --yes flag is provided)
+    if not args.yes:
+        try:
+            response = input(f"\nReady to run {total_experiments} experiments. Continue? (yes/no): ")
+            if response.lower() not in ['yes', 'y']:
+                print("Sweep cancelled.")
+                sys.exit(0)
+        except EOFError:
+            # No input available (e.g., running in nohup), auto-confirm
+            print("\nNo input available (nohup mode detected), auto-confirming...")
+            print("Starting sweep automatically...")
+    else:
+        print("\n--yes flag provided, skipping confirmation...")
+        print("Starting sweep automatically...")
     
     # Run experiments
     start_time = time.time()

@@ -55,17 +55,23 @@ SSH切断後も実験を継続したい場合に最適です。
 #### 手動での nohup 実行
 
 ```bash
-# 逐次実行
-nohup python -u run_hyperparameter_sweep.py > logs/sweep/sweep_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+# 逐次実行（--yes フラグで確認をスキップ）
+nohup python -u run_hyperparameter_sweep.py --yes > logs/sweep/sweep_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 
-# 並列実行
-nohup python -u run_hyperparameter_sweep_parallel.py > logs/sweep/sweep_parallel_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+# 並列実行（--yes フラグで確認をスキップ）
+nohup python -u run_hyperparameter_sweep_parallel.py --yes > logs/sweep/sweep_parallel_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 
 # PIDを確認
 echo $!
+
+# ラウンド数を指定する場合（例：30ラウンド）
+nohup python -u run_hyperparameter_sweep_parallel.py --yes --rounds 30 > logs/sweep/sweep_parallel_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 ```
 
-**重要**: `-u` フラグは Python の出力バッファリングを無効化し、リアルタイムでログに記録します。
+**重要**: 
+- `-u` フラグは Python の出力バッファリングを無効化し、リアルタイムでログに記録します
+- `--yes` フラグは確認プロンプトをスキップ（nohup実行時は必須）
+- `--rounds N` で各実験のラウンド数を上書き可能
 
 **並列数の調整**:
 
