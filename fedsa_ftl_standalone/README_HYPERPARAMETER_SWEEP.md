@@ -34,9 +34,38 @@ python run_hyperparameter_sweep_parallel.py
 
 **特徴**:
 - 複数の実験を並列実行
-- デフォルトで2並列（`NUM_PARALLEL_JOBS`で調整可能）
+- GPU自動検出（3枚なら3並列、4枚なら4並列）
 - 実行時間が大幅に短縮（最大で並列数倍速）
 - 複数GPUまたは大容量GPUメモリが必要
+
+### 方法3: nohup でバックグラウンド実行（推奨：長時間実験）
+
+SSH切断後も実験を継続したい場合に最適です。
+
+#### 簡単な実行方法（ヘルパースクリプト使用）
+
+```bash
+# 逐次実行をバックグラウンドで
+./run_sweep_nohup.sh sequential
+
+# 並列実行をバックグラウンドで
+./run_sweep_nohup.sh parallel
+```
+
+#### 手動での nohup 実行
+
+```bash
+# 逐次実行
+nohup python -u run_hyperparameter_sweep.py > logs/sweep/sweep_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+
+# 並列実行
+nohup python -u run_hyperparameter_sweep_parallel.py > logs/sweep/sweep_parallel_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+
+# PIDを確認
+echo $!
+```
+
+**重要**: `-u` フラグは Python の出力バッファリングを無効化し、リアルタイムでログに記録します。
 
 **並列数の調整**:
 
@@ -193,14 +222,36 @@ CUDA out of memory
 
 ### プロセスの監視
 
-別のターミナルで進行状況を監視：
+#### ヘルパースクリプトで確認（推奨）
+
+```bash
+# 実行状況を確認
+./check_sweep_status.sh
+
+# リアルタイムでログを監視
+tail -f logs/sweep/sweep_*.log
+
+# 実験を停止
+./stop_sweep.sh
+```
+
+#### 手動での監視
 
 ```bash
 # GPU使用率の監視
 watch -n 1 nvidia-smi
 
+# プロセスの確認
+ps aux | grep run_hyperparameter_sweep
+
+# ログをリアルタイム表示
+tail -f logs/sweep/sweep_*.log
+
 # 完了した実験数を確認
 find experiments/hyperparameter_sweep/TIMESTAMP -name "final_results_*.json" | wc -l
+
+# プロセスを停止（PIDが12345の場合）
+kill 12345
 ```
 
 ## 結果の分析
@@ -241,6 +292,62 @@ for dropout in df_success['dropout'].unique():
     plt.savefig(f'heatmap_dropout_{dropout}.png')
     plt.close()
 ```
+
+## ヘルパースクリプト
+
+### `run_sweep_nohup.sh`
+バックグラウンドで sweep を開始
+
+```bash
+./run_sweep_nohup.sh sequential   # 逐次実行
+./run_sweep_nohup.sh parallel     # 並列実行
+```
+
+### `check_sweep_status.sh`
+実行中の sweep の状況を確認
+
+```bash
+./check_sweep_status.sh
+```
+
+出力例：
+```
+✅ Parallel sweep is RUNNING (PID: 12345)
+   Process info: 12345 01:23:45 25.3 2.1 python run_hyperparameter_sweep_parallel.py
+   Latest log: logs/sweep/sweep_parallel_20251001_120000.log
+   
+Completed Experiments:
+20251001_120000: 15/99 experiments completed
+
+GPU Usage:
+GPU 0 (NVIDIA RTX 3090): 95% util, 8192MB / 24576MB
+GPU 1 (NVIDIA RTX 3090): 94% util, 8105MB / 24576MB
+GPU 2 (NVIDIA RTX 3090): 96% util, 8234MB / 24576MB
+```
+
+### `stop_sweep.sh`
+実行中の sweep を停止
+
+```bash
+./stop_sweep.sh
+```
+
+## よくある質問
+
+### Q: SSH切断後も実験を続けたい
+A: `./run_sweep_nohup.sh` を使用してください。
+
+### Q: 実験の進捗を確認したい
+A: `./check_sweep_status.sh` または `tail -f logs/sweep/sweep_*.log` を使用。
+
+### Q: 実験を途中で止めたい
+A: `./stop_sweep.sh` または手動で `kill <PID>` を実行。
+
+### Q: 並列実行で GPU 数を制限したい
+A: `run_hyperparameter_sweep_parallel.py` の `NUM_PARALLEL_JOBS = 2` を編集。
+
+### Q: 実験が失敗した組み合わせだけを再実行したい
+A: `sweep_summary.json` を確認して、失敗した実験の設定を抽出し、新しいスクリプトを作成。
 
 ## 参考
 
