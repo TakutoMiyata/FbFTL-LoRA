@@ -520,6 +520,8 @@ def main():
                        help='Override number of clients')
     parser.add_argument('--model', type=str, choices=['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152'], 
                        default=None, help='Override ResNet model variant')
+    parser.add_argument('--gpu_id', type=int, default=None,
+                       help='GPU device ID to use (0, 1, 2, etc.)')
     
     args = parser.parse_args()
     
@@ -627,14 +629,36 @@ def main():
     if args.model:
         config['model']['model_name'] = args.model
     
-    # Set device
-    device = torch.device('cuda' if config.get('use_gpu', False) and torch.cuda.is_available() else 'cpu')
+    # Set device with explicit GPU ID support
+    if args.gpu_id is not None:
+        # If GPU ID is specified, use that specific GPU
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu_id)
+        # Force re-check of CUDA availability after setting environment
+        if torch.cuda.is_available():
+            device = torch.device('cuda:0')
+            print(f"✅ Using specified GPU {args.gpu_id} (mapped to cuda:0)")
+            print(f"   GPU Name: {torch.cuda.get_device_name(0)}")
+            print(f"   GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+        else:
+            device = torch.device('cpu')
+            print(f"⚠️  GPU {args.gpu_id} specified but CUDA not available, using CPU")
+    else:
+        # Use default GPU detection
+        device = torch.device('cuda' if config.get('use_gpu', False) and torch.cuda.is_available() else 'cpu')
+        if device.type == 'cuda':
+            print(f"✅ Using default GPU detection")
+            print(f"   Available GPUs: {torch.cuda.device_count()}")
+            print(f"   Current GPU: {torch.cuda.get_device_name(0)}")
+        else:
+            print("ℹ️  Using CPU")
     
     print("=" * 80)
     print("FedSA-LoRA ResNet Federated Learning (A matrices only)")
     print("=" * 80)
     print(f"Configuration: {config_path}")
     print(f"Device: {device}")
+    if args.gpu_id is not None:
+        print(f"GPU ID: {args.gpu_id}")
     print(f"Model: {config['model']['model_name']}")
     print(f"Dataset: {config['data']['dataset_name'].upper()}")
     print(f"Clients: {config['federated']['num_clients']}")
