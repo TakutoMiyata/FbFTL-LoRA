@@ -3,7 +3,7 @@
 Hyperparameter sweep script for FedSA-LoRA experiments
 Automatically runs experiments with different combinations of:
 - data.alpha: [0.1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-- training.lr: [0.001, 0.00001, 0.000001]
+- training.lr: [0.001, 0.0001, 0.00001]
 - lora.dropout: [0.1, 0.2, 0.3]
 """
 
@@ -19,7 +19,7 @@ import time
 
 # Hyperparameter grid
 ALPHA_VALUES = [0.1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-LR_VALUES = [0.001, 0.00001, 0.000001]
+LR_VALUES = [0.001, 0.0001, 0.00001]
 DROPOUT_VALUES = [0.1, 0.2, 0.3]
 
 # Base configuration file
