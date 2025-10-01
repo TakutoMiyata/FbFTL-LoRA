@@ -91,7 +91,7 @@ privacy:
   enable_privacy: true
   epsilon: 2.0
   max_grad_norm: 1.0
-  noise_multiplier: 3.0   # ε≈2 を狙う
+  noise_multiplier: 2.5   # ε≈2 を狙う
   # noise_multiplier: 1.4 # ε≈4 を狙う
   # noise_multiplier: 0.7 # ε≈8 を狙う
   # noise_multiplier: 0.35# ε≈16 を狙う
