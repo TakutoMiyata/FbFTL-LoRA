@@ -81,21 +81,30 @@ def run_experiment_worker(exp_info, gpu_id, result_queue):
     
     print(f"[GPU {gpu_id}] Starting experiment {idx}: alpha={alpha}, lr={lr}, dropout={dropout}")
     
-    # Set GPU environment variable
+    # Set GPU environment variable - THIS IS CRITICAL FOR GPU ASSIGNMENT
     env = os.environ.copy()
     env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
     
-    # Run experiment
-    cmd = ["python", "quickstart_resnet.py", "--config", str(config_path)]
+    # Add GPU device argument to the command and force fresh Python process
+    cmd = ["python", "-u", "quickstart_resnet.py", "--config", str(config_path), "--gpu_id", str(gpu_id)]
     
     exp_start_time = time.time()
     try:
         with open(log_file, 'w') as f:
+            # Write GPU assignment info to log
+            f.write(f"=== GPU Assignment Info ===\n")
+            f.write(f"GPU ID: {gpu_id}\n")
+            f.write(f"CUDA_VISIBLE_DEVICES: {gpu_id}\n")
+            f.write(f"Command: {' '.join(cmd)}\n")
+            f.write(f"=== Experiment Output ===\n")
+            f.flush()
+            
             process = subprocess.Popen(
                 cmd,
                 stdout=f,
                 stderr=subprocess.STDOUT,
-                env=env
+                env=env,
+                cwd=os.getcwd()  # Ensure correct working directory
             )
             process.wait()
             return_code = process.returncode
