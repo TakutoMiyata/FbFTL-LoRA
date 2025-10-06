@@ -39,6 +39,22 @@ except ImportError:
     clear_grad_sample = None
     print("Warning: Opacus not available. Install with: pip install opacus")
 
+# GradScaler compatibility for different PyTorch versions
+try:
+    # PyTorch 2.0+ uses torch.amp.GradScaler and torch.amp.autocast
+    from torch.amp import GradScaler, autocast
+    def create_grad_scaler(device='cuda'):
+        return GradScaler(device)
+    def create_autocast(device='cuda', enabled=True):
+        return autocast(device, enabled=enabled)
+except (ImportError, AttributeError):
+    # PyTorch 1.x uses torch.cuda.amp.GradScaler and torch.cuda.amp.autocast
+    from torch.cuda.amp import GradScaler, autocast
+    def create_grad_scaler(device='cuda'):
+        return GradScaler()
+    def create_autocast(device='cuda', enabled=True):
+        return autocast(enabled=enabled)
+
 
 def manual_clear_grad_sample(model):
     """
@@ -328,7 +344,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
 
         # AMP は DP 無効時のみ
         model_is_half = next(self.model.parameters()).dtype == torch.float16
-        scaler = torch.amp.GradScaler('cuda') if (self.use_amp and torch.cuda.is_available() and not model_is_half) else None
+        scaler = create_grad_scaler('cuda') if (self.use_amp and torch.cuda.is_available() and not model_is_half) else None
 
         for epoch in range(num_epochs):
             epoch_loss = 0.0
@@ -378,7 +394,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     self.dp_optimizer.zero_grad()
                     self.local_optimizer.zero_grad()
 
-                    with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
+                    with create_autocast('cuda', enabled=self.use_amp and scaler is not None):
                         output = self.model(data)
                     if len(target.shape) > 1:
                         loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
@@ -392,7 +408,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 else:
                     # 標準 FedSA/FedAvg の場合（単一 optimizer）
                     self.optimizer.zero_grad()
-                    with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
+                    with create_autocast('cuda', enabled=self.use_amp and scaler is not None):
                         output = self.model(data)
                     if len(target.shape) > 1:
                         loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
