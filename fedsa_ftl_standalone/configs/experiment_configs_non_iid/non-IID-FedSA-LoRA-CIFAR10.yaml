@@ -2,19 +2,18 @@ advanced:
   feature_extraction_rounds: 10
   personalization_layers:
   - classifier
-  personalized: false
+  - lora_B
+  personalized: true
   server_lr: 1.0
   server_momentum: 0.9
   use_fbftl: false
-
 communication:
   compress: false
   compression_ratio: 0.1
   quantization_bits: null
-
 data:
-  alpha: 0.1
-  dataset_name: cifar10  # Changed from cifar100 to cifar10
+  alpha: 0.5
+  dataset_name: cifar100
   data_split: non_iid
   input_size: 224
   imagenet_style: true
@@ -22,7 +21,9 @@ data:
   data_dir: ./data
   model_type: imagenet
   num_clients: 10
-  num_workers: 4
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
   verbose: false
   augmentations:
     color_jitter:
@@ -54,60 +55,52 @@ data:
     random_resized_crop:
       enabled: true
       scale_min: 0.5
-
 evaluation:
-  eval_freq: 2
+  eval_freq: 1
   metric: accuracy
   patience: 30
   save_best_model: true
-
 experiment:
   log_interval: 10
-  name: FedSA_LoRA_MobileNetV2_CIFAR10_non_IID  # Updated experiment name
-  output_dir: experiments/quickstart_resnet_non_iid_cifar10  # Updated output dir
+  name: FedSA_LoRA_MobileNetV2_CIFAR10_non_IID
+  output_dir: experiments/cifar10/quickstart_resnet_non_iid
   save_history: true
   save_model: true
   use_wandb: false
   wandb_entity: null
-  wandb_project: fedsa-lora-cifar10
-
+  wandb_project: fedsa-ftl-resnet
 federated:
-  aggregation_method: fedsa_shareA
+  aggregation_method: fedsa
   checkpoint_freq: 25
   client_fraction: 0.3
   num_clients: 10
   num_rounds: 100
   exclude_bn_from_agg: true
-
 model:
   model_name: mobilenet_v2
-  num_classes: 10  # Changed from 100 to 10 for CIFAR-10
+  num_classes: 100
   pretrained: true
-  freeze_backbone: true  # FedSA-LoRA: freeze backbone
+  freeze_backbone: true
   lora:
-    enabled: true  # Enable LoRA
+    enabled: true
     r: 8
     alpha: 16
     dropout: 0.1
-
 privacy:
   delta: 1.0e-05
   enable_privacy: false
   epsilon: 8.0
   max_grad_norm: 0.5
   noise_multiplier: 1.0
-  target: all_params
+  target: lora_A
   use_opacus_accounting: true
-
 reproducibility:
   deterministic: false
-
 seed: 42
-
 training:
   epochs: 2
-  lr: 0.001
-  weight_decay: 0.0005
+  lr: 0.001  # Increased for faster convergence with LoRA and new classifier
+  weight_decay: 0.0005  # Reduced to allow better learning
   scheduler: cosine
   warmup_epochs: 0
   label_smoothing: 0.1
@@ -115,6 +108,5 @@ training:
   optimizer: adamw
   momentum: 0.9
   microbatch_size: 32
-
 use_gpu: true
-use_amp: true
+use_amp: false
