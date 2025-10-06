@@ -190,9 +190,23 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
 
             self.local_params = self.B_params + cls_params
             
+            # Print parameter statistics
+            num_A_tensors = len(self.A_params)
+            num_A_elements = sum(p.numel() for p in self.A_params)
+            num_B_tensors = len(self.B_params)
+            num_B_elements = sum(p.numel() for p in self.B_params)
+            num_cls_tensors = len(cls_params)
+            num_cls_elements = sum(p.numel() for p in cls_params)
+            
+            print(f"Client {client_id}: Separated optimizers (DP mode)")
+            print(f"  A params: {num_A_tensors} tensors ({num_A_elements:,} elements)")
+            print(f"  B params: {num_B_tensors} tensors ({num_B_elements:,} elements)")
+            print(f"  Classifier: {num_cls_tensors} tensors ({num_cls_elements:,} elements)")
+            print(f"  Local (B+cls): {len(self.local_params)} tensors ({num_B_elements + num_cls_elements:,} elements)")
+            
             # Safety check for local parameters
             if len(self.local_params) == 0:
-                print(f"Warning: client {client_id} has no local_params (B+classifier). Check head detection.")
+                print(f"⚠️  Warning: client {client_id} has no local_params (B+classifier). Check head detection.")
                 print(f"  Model has: classifier={hasattr(model, 'classifier')}, fc={hasattr(model, 'fc')}, head={hasattr(model, 'head')}")
 
             # Create optimizers for A-only and B+classifier using parent class method
@@ -220,7 +234,9 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         else:
             # Standard single optimizer for all trainable parameters
             trainable_params = [p for p in model.parameters() if p.requires_grad]
-            print(f"Client {client_id}: Single optimizer tracking {len(trainable_params)} trainable parameters")
+            num_param_tensors = len(trainable_params)
+            num_param_elements = sum(p.numel() for p in trainable_params)
+            print(f"Client {client_id}: Single optimizer tracking {num_param_tensors} parameter tensors ({num_param_elements:,} elements)")
             
             # Use helper method to create optimizer based on config
             self.optimizer = self._create_optimizer_for_params(trainable_params, training_config)
