@@ -332,7 +332,7 @@ class SlackNotifier:
                     },
                     {
                         "type": "mrkdwn",
-                        "text": f"*Test Accuracy:*\n{test_acc:.2f}%"
+                        "text": f"*Test Accuracy:*\n{test_acc:.2f}%" if test_acc is not None else "*Test Accuracy:*\nN/A"
                     },
                     {
                         "type": "mrkdwn",
