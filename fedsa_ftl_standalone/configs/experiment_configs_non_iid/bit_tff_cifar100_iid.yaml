@@ -7,17 +7,20 @@ use_gpu: true
 use_amp: false
 
 data:
-  dataset_name: tff_cifar100_iid  # IID version
+  dataset_name: cifar100  # Standard CIFAR-100 (not TFF)
   data_dir: ./data
   num_clients: 10
-  num_test_clients: 30
+  num_test_clients: 10  # Same as training clients for standard CIFAR-100
   batch_size: 64
   num_workers: 4
   pin_memory: true
   input_size: 224
   verbose: false
-  # IID-specific: redistribute_iid will aggregate and resplit uniformly
-  redistribute_iid: true  # Enable IID redistribution
+  imagenet_style: true  # Use ImageNet transforms for BiT
+  # IID-specific: use standard CIFAR-100 with IID split
+  redistribute_iid: true  # Enable IID mode (uses data_utils instead of TFF)
+  data_split: iid  # Use IID split from data_utils
+  seed: 42
   augmentations:
     horizontal_flip:
       enabled: true

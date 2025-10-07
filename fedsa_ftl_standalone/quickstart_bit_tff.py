@@ -548,13 +548,45 @@ def main():
             raise RuntimeError("Privacy is enabled but Opacus is not installed.")
         print("✅ Opacus is available for Differential Privacy")
 
-    print("\nPreparing TFF CIFAR-100 federated data...")
-    train_datasets, test_datasets, client_info = prepare_tff_federated_data(config['data'])
+    # Check if IID mode is requested
+    use_iid = config['data'].get('redistribute_iid', False)
 
-    print(f"\n✅ TFF data loaded:")
-    print(f"  Training clients: {client_info['num_train_clients']}")
-    print(f"  Test clients: {client_info['num_test_clients']}")
-    print(f"  Split method: {client_info['split_method']}")
+    if use_iid:
+        # IID: Use standard CIFAR-100 with data_utils
+        print("\nPreparing standard CIFAR-100 federated data (IID)...")
+        from data_utils import prepare_federated_data, get_client_dataloader
+
+        trainset, testset, client_train_indices, client_test_indices = prepare_federated_data(config['data'])
+
+        print(f"\n✅ Standard CIFAR-100 data loaded (IID):")
+        print(f"  Training clients: {len(client_train_indices)}")
+        print(f"  Test clients: {len(client_test_indices)}")
+        print(f"  Split method: IID (uniform distribution)")
+        print(f"  Using standard torchvision CIFAR-100")
+
+        # Convert to TFF-like format for compatibility
+        train_datasets = {}
+        test_datasets = {}
+        for i, indices in enumerate(client_train_indices):
+            train_datasets[i] = (trainset, indices)
+        for i, indices in enumerate(client_test_indices):
+            test_datasets[i] = (testset, indices)
+
+        client_info = {
+            'num_train_clients': len(client_train_indices),
+            'num_test_clients': len(client_test_indices),
+            'split_method': 'IID (standard CIFAR-100)',
+            'use_standard_cifar': True
+        }
+    else:
+        # Non-IID: Use TFF CIFAR-100
+        print("\nPreparing TFF CIFAR-100 federated data (non-IID)...")
+        train_datasets, test_datasets, client_info = prepare_tff_federated_data(config['data'])
+
+        print(f"\n✅ TFF data loaded:")
+        print(f"  Training clients: {client_info['num_train_clients']}")
+        print(f"  Test clients: {client_info['num_test_clients']}")
+        print(f"  Split method: {client_info['split_method']}")
 
     print(f"\nCreating BiT model...")
     initial_model = make_bit_model_with_lora(config)
@@ -694,14 +726,27 @@ def main():
         for client_idx in client_pbar:
             client_pbar.set_description(f"Training client {client_idx}")
 
-            tff_client_id = train_client_ids[client_idx]
-            client_dataset = train_datasets[tff_client_id]
-            client_dataloader = get_tff_dataloader(
-                client_dataset,
-                batch_size=config['data']['batch_size'],
-                shuffle=True,
-                num_workers=config['data'].get('num_workers', 0)
-            )
+            # Create dataloader based on data source
+            if client_info.get('use_standard_cifar', False):
+                # IID: Use standard CIFAR-100
+                trainset, indices = train_datasets[client_idx]
+                client_dataloader = get_client_dataloader(
+                    trainset,
+                    indices,
+                    batch_size=config['data']['batch_size'],
+                    shuffle=True,
+                    num_workers=config['data'].get('num_workers', 0)
+                )
+            else:
+                # Non-IID: Use TFF CIFAR-100
+                tff_client_id = train_client_ids[client_idx]
+                client_dataset = train_datasets[tff_client_id]
+                client_dataloader = get_tff_dataloader(
+                    client_dataset,
+                    batch_size=config['data']['batch_size'],
+                    shuffle=True,
+                    num_workers=config['data'].get('num_workers', 0)
+                )
 
             if hasattr(server, 'global_A_params') and server.global_A_params:
                 clients[client_idx].update_model({'A_params': server.global_A_params})
@@ -728,31 +773,50 @@ def main():
             personalized_results = []
             personalized_accuracies = []
 
-            # Create a single combined test dataloader from all test clients
-            # This simulates evaluating on a "global test set"
-            all_test_samples = []
-            for test_id in test_client_ids:
-                test_dataset = test_datasets[test_id]
-                all_test_samples.extend([(test_dataset[i][0], test_dataset[i][1]) for i in range(len(test_dataset))])
+            # Create combined test dataloader based on data source
+            if client_info.get('use_standard_cifar', False):
+                # IID: Use standard CIFAR-100 test set
+                # Combine all test client indices
+                all_test_indices = []
+                for test_idx in range(len(test_datasets)):
+                    test_set_ref, indices = test_datasets[test_idx]
+                    all_test_indices.extend(indices)
 
-            # Create a simple dataset wrapper
-            class CombinedTestDataset(torch.utils.data.Dataset):
-                def __init__(self, samples):
-                    self.samples = samples
-                def __len__(self):
-                    return len(self.samples)
-                def __getitem__(self, idx):
-                    return self.samples[idx]
+                # Use the testset reference from first client
+                test_set_ref, _ = test_datasets[0]
+                combined_test_loader = get_client_dataloader(
+                    test_set_ref,
+                    all_test_indices,
+                    batch_size=config['data']['batch_size'],
+                    shuffle=False,
+                    num_workers=config['data'].get('num_workers', 0)
+                )
+                print(f"  Combined test set: {len(all_test_indices)} samples from standard CIFAR-100")
+            else:
+                # Non-IID: Use TFF CIFAR-100
+                # Create a single combined test dataloader from all test clients
+                all_test_samples = []
+                for test_id in test_client_ids:
+                    test_dataset = test_datasets[test_id]
+                    all_test_samples.extend([(test_dataset[i][0], test_dataset[i][1]) for i in range(len(test_dataset))])
 
-            combined_test_dataset = CombinedTestDataset(all_test_samples)
-            combined_test_loader = get_tff_dataloader(
-                combined_test_dataset,
-                batch_size=config['data']['batch_size'],
-                shuffle=False,
-                num_workers=config['data'].get('num_workers', 0)
-            )
+                # Create a simple dataset wrapper
+                class CombinedTestDataset(torch.utils.data.Dataset):
+                    def __init__(self, samples):
+                        self.samples = samples
+                    def __len__(self):
+                        return len(self.samples)
+                    def __getitem__(self, idx):
+                        return self.samples[idx]
 
-            print(f"  Combined test set: {len(all_test_samples)} samples from {len(test_client_ids)} test clients")
+                combined_test_dataset = CombinedTestDataset(all_test_samples)
+                combined_test_loader = get_tff_dataloader(
+                    combined_test_dataset,
+                    batch_size=config['data']['batch_size'],
+                    shuffle=False,
+                    num_workers=config['data'].get('num_workers', 0)
+                )
+                print(f"  Combined test set: {len(all_test_samples)} samples from {len(test_client_ids)} test clients")
 
             for client_idx in selected_clients:
                 # Evaluate this training client's personalized model on combined test set
