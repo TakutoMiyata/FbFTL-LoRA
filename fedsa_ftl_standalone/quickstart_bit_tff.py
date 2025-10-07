@@ -17,7 +17,7 @@ import time
 from datetime import datetime
 
 # Set GPU device BEFORE any CUDA operations
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 # Configure TensorFlow to not hog all GPU memory
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
