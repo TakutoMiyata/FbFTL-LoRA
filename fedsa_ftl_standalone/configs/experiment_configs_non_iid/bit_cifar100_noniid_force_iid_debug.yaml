@@ -1,0 +1,115 @@
+# BiT CIFAR-100 Non-IID Configuration (Debug: Force IID)
+# Forces IID distribution while using non-IID code path
+# Perfect for debugging non-IID logic with predictable IID data
+
+seed: 42
+use_gpu: true
+use_amp: false
+
+data:
+  dataset_name: cifar100
+  data_dir: ./data
+  num_clients: 10
+  num_test_clients: 10
+  batch_size: 64
+  num_workers: 4
+  pin_memory: true
+  input_size: 224
+  verbose: true  # Enable to see distribution
+  imagenet_style: true
+  # DEBUG: Force IID splits for non-IID code path
+  data_split: non_iid  # Uses non-IID code path
+  force_iid_for_debug: true  # But forces IID distribution!
+  alpha: 0.5  # This will be ignored due to force_iid_for_debug
+  seed: 42
+  augmentations:
+    horizontal_flip:
+      enabled: true
+      prob: 0.5
+    random_rotation:
+      enabled: false  # Disable for faster debugging
+      degrees: 20
+    random_resized_crop:
+      enabled: false  # Disable for faster debugging
+      scale_min: 0.4
+    color_jitter:
+      enabled: false  # Disable for faster debugging
+      brightness: 0.3
+      contrast: 0.3
+      saturation: 0.3
+      hue: 0.1
+    random_erasing:
+      enabled: false  # Disable for faster debugging
+      prob: 0.3
+    mixup:
+      enabled: false
+      alpha: 0.2
+      prob: 0.5
+    cutmix:
+      enabled: false
+      alpha: 1.0
+      prob: 0.5
+
+model:
+  model_name: bit_m_r50x1
+  num_classes: 100
+  pretrained: true
+  freeze_backbone: true
+  lora:
+    enabled: true
+    r: 8
+    alpha: 16
+    dropout: 0.1
+
+training:
+  epochs: 1  # Quick debugging
+  lr: 0.0001
+  momentum: 0.9
+  weight_decay: 0.001
+  scheduler: cosine
+  warmup_epochs: 0
+  label_smoothing: 0.1
+  gradient_clip: 1.0
+  optimizer: sgd
+
+federated:
+  num_rounds: 5  # Very short for debugging
+  num_clients: 10
+  client_fraction: 1.0
+  aggregation_method: fedsa
+  checkpoint_freq: 5
+  exclude_bn_from_agg: true
+
+privacy:
+  enable_privacy: false
+
+evaluation:
+  eval_freq: 1  # Evaluate every round for debugging
+  metric: accuracy
+  save_best_model: false
+
+experiment:
+  name: BiT_CIFAR100_NonIID_ForceIID_Debug
+  output_dir: experiments/debug_bit
+  save_history: true
+  save_model: false
+  log_interval: 5
+  use_wandb: false
+
+reproducibility:
+  deterministic: false
+
+advanced:
+  personalized: true
+  personalization_layers:
+    - lora_B
+    - head
+  use_fbftl: false
+  feature_extraction_rounds: 10
+  server_lr: 1.0
+  server_momentum: 0.9
+
+communication:
+  compress: false
+  compression_ratio: 0.1
+  quantization_bits: null

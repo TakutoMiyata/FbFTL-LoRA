@@ -483,7 +483,10 @@ def prepare_federated_data(config: Dict):
     data_split = config.get('data_split', 'non_iid')
     
     # Create train splits
-    if data_split == 'non_iid':
+    # DEBUG: Check if force_iid_for_debug is enabled
+    force_iid_debug = config.get('force_iid_for_debug', False)
+
+    if data_split == 'non_iid' and not force_iid_debug:
         alpha = config.get('alpha', 0.5)
         client_train_indices = create_non_iid_splits(trainset, num_clients, alpha)
         # Create test splits with the same distribution
@@ -492,7 +495,11 @@ def prepare_federated_data(config: Dict):
         client_test_indices = create_non_iid_splits(testset, num_clients, alpha)
         # Reset seed
         np.random.seed(config.get('seed', 42))
+        if force_iid_debug:
+            print("⚠️  DEBUG MODE: force_iid_for_debug=True, using IID splits despite data_split=non_iid")
     else:
+        if force_iid_debug and data_split == 'non_iid':
+            print("🔧 DEBUG MODE: Forcing IID splits for non-IID code path testing")
         client_train_indices = create_iid_splits(trainset, num_clients)
         client_test_indices = create_iid_splits(testset, num_clients)
     

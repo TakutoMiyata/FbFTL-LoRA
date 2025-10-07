@@ -367,10 +367,13 @@ class SlackNotifier:
             ]
         })
         
-        return self.send_message(
-            f"Progress Update: {experiment_name} - Round {current_round}/{total_rounds} - Test: {test_acc:.2f}%",
-            blocks=blocks
-        )
+        # Format message with None check for test_acc
+        if test_acc is not None:
+            message = f"Progress Update: {experiment_name} - Round {current_round}/{total_rounds} - Test: {test_acc:.2f}%"
+        else:
+            message = f"Progress Update: {experiment_name} - Round {current_round}/{total_rounds} - Test: N/A"
+
+        return self.send_message(message, blocks=blocks)
     
     def send_error_notification(self, config: Dict, error_message: str) -> bool:
         """
