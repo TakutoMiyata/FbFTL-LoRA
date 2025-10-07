@@ -74,7 +74,7 @@ training:
 federated:
   num_rounds: 200
   num_clients: 10
-  client_fraction: 1.0
+  client_fraction: 0.3
   aggregation_method: fedsa
   checkpoint_freq: 25
   exclude_bn_from_agg: true
@@ -89,7 +89,7 @@ privacy:
   use_opacus_accounting: true
 
 evaluation:
-  eval_freq: 5
+  eval_freq: 2
   metric: accuracy
   save_best_model: true
 
