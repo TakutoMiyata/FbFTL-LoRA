@@ -657,8 +657,15 @@ def main():
 
     privacy_enabled = config.get('privacy', {}).get('enable_privacy', False)
 
-    train_client_ids = client_info['train_client_ids']
-    test_client_ids = client_info['test_client_ids']
+    # Get client IDs based on data source
+    if client_info.get('use_standard_cifar', False):
+        # IID: Use simple integer indices
+        train_client_ids = list(range(client_info['num_train_clients']))
+        test_client_ids = list(range(client_info['num_test_clients']))
+    else:
+        # Non-IID: Use TFF client IDs
+        train_client_ids = client_info['train_client_ids']
+        test_client_ids = client_info['test_client_ids']
 
     for i, client_id in enumerate(train_client_ids):
         privacy_mechanism = None
