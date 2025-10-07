@@ -263,6 +263,66 @@ def get_tff_dataloader(dataset: TFFCifar100Dataset,
     )
 
 
+def redistribute_iid(datasets: Dict[str, TFFCifar100Dataset],
+                     num_clients: int,
+                     seed: int = 42) -> Dict[str, TFFCifar100Dataset]:
+    """
+    Redistribute TFF data uniformly to create IID clients
+
+    Args:
+        datasets: Original non-IID datasets
+        num_clients: Number of clients to create
+        seed: Random seed
+
+    Returns:
+        Dictionary of IID redistributed datasets
+    """
+    print(f"\n🔄 Redistributing data for IID (uniform distribution)...")
+
+    # Aggregate all data
+    all_images = []
+    all_labels = []
+
+    for client_id, dataset in datasets.items():
+        all_images.extend(dataset.images)
+        all_labels.extend(dataset.labels)
+
+    all_images = np.array(all_images)
+    all_labels = np.array(all_labels)
+
+    total_samples = len(all_images)
+    print(f"  Total samples: {total_samples}")
+
+    # Shuffle with seed
+    np.random.seed(seed)
+    indices = np.random.permutation(total_samples)
+    all_images = all_images[indices]
+    all_labels = all_labels[indices]
+
+    # Split uniformly
+    samples_per_client = total_samples // num_clients
+    iid_datasets = {}
+
+    for i in range(num_clients):
+        start_idx = i * samples_per_client
+        end_idx = (i + 1) * samples_per_client if i < num_clients - 1 else total_samples
+
+        # Create new dataset for this client
+        client_dataset = TFFCifar100Dataset.__new__(TFFCifar100Dataset)
+        client_dataset.images = all_images[start_idx:end_idx].tolist()
+        client_dataset.labels = all_labels[start_idx:end_idx].tolist()
+        client_dataset.transform = list(datasets.values())[0].transform  # Copy transform
+
+        iid_datasets[f"iid_client_{i}"] = client_dataset
+
+        # Check class distribution
+        unique, counts = np.unique(client_dataset.labels, return_counts=True)
+        print(f"  Client {i}: {len(client_dataset.labels)} samples, {len(unique)} classes")
+
+    print(f"✅ IID redistribution complete: {num_clients} clients with uniform distribution")
+    return iid_datasets
+
+
 def analyze_tff_distribution(datasets: Dict[str, TFFCifar100Dataset],
                              dataset_type: str = "train",
                              num_classes: int = 100):
@@ -322,6 +382,7 @@ def prepare_tff_federated_data(config: Dict):
     num_test_clients = config.get('num_test_clients', 30)
     input_size = config.get('input_size', 224)
     augmentation_config = config.get('augmentations', {})
+    redistribute_iid_flag = config.get('redistribute_iid', False)
 
     # Determine if augmentation is enabled
     augment_train = any(
@@ -332,9 +393,12 @@ def prepare_tff_federated_data(config: Dict):
 
     # Select clients
     # Note: TFF train and test client IDs are separate (train: 500 clients, test: 100 clients)
-    train_client_ids = select_training_clients(num_train_clients, seed)
-    # For test, select fixed 30 clients from test pool (100 test clients)
-    test_client_ids = select_fixed_test_clients(min(30, num_test_clients), seed)
+    # For IID: select more clients to aggregate more data
+    initial_train_clients = num_train_clients if not redistribute_iid_flag else min(100, num_train_clients * 10)
+    train_client_ids = select_training_clients(initial_train_clients, seed)
+    # For test, select fixed clients from test pool (100 test clients)
+    initial_test_clients = min(30, num_test_clients) if not redistribute_iid_flag else min(100, 100)
+    test_client_ids = select_fixed_test_clients(initial_test_clients, seed)
 
     print(f"\n📊 Client selection:")
     print(f"   Training: {len(train_client_ids)} clients from 500 train pool")
@@ -349,15 +413,25 @@ def prepare_tff_federated_data(config: Dict):
         augment_train=augment_train
     )
 
+    # Redistribute for IID if requested
+    if redistribute_iid_flag:
+        print(f"\n🎲 IID mode enabled: redistributing data uniformly...")
+        train_datasets = redistribute_iid(train_datasets, num_train_clients, seed)
+        test_datasets = redistribute_iid(test_datasets, num_test_clients, seed)
+        split_method = "IID (uniform redistribution)"
+    else:
+        split_method = "Hierarchical LDA (non-IID)"
+
     # Analyze distribution if verbose
     if config.get('verbose', False):
         analyze_tff_distribution(train_datasets, "train")
         analyze_tff_distribution(test_datasets, "test")
 
     print(f"\n✅ TFF CIFAR-100 data prepared:")
-    print(f"  Training clients: {num_train_clients} (from 500 train pool)")
-    print(f"  Test clients: {len(test_client_ids)} (from 100 test pool)")
-    print(f"  Split method: Hierarchical LDA (non-IID)")
-    print(f"  Each client has ~100 samples")
+    print(f"  Training clients: {len(train_datasets)}")
+    print(f"  Test clients: {len(test_datasets)}")
+    print(f"  Split method: {split_method}")
+    if not redistribute_iid_flag:
+        print(f"  Each client has ~100 samples")
 
     return train_datasets, test_datasets, client_info

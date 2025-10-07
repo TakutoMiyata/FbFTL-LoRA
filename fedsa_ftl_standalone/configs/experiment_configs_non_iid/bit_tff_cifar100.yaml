@@ -52,15 +52,15 @@ model:
   freeze_backbone: true  # Freeze backbone for transfer learning
   lora:
     enabled: true
-    r: 8  # LoRA rank
-    alpha: 16  # LoRA scaling factor
+    r: 16  # LoRA rank
+    alpha: 32  # LoRA scaling factor
     dropout: 0.1
 
 training:
-  epochs: 5  # Local epochs per round
-  lr: 0.001  # Learning rate
+  epochs: 3  # Local epochs per round
+  lr: 0.00001  # Learning rate
   momentum: 0.9
-  weight_decay: 0.0001
+  weight_decay: 0.001
   scheduler: cosine
   warmup_epochs: 0
   label_smoothing: 0.0
@@ -85,7 +85,7 @@ privacy:
   use_opacus_accounting: true
 
 evaluation:
-  eval_freq: 2  # Evaluate every 25 rounds (as per paper)
+  eval_freq: 5  # Evaluate every 25 rounds (as per paper)
   metric: accuracy
   save_best_model: true
 
