@@ -83,7 +83,7 @@ privacy:
   use_opacus_accounting: true
 
 evaluation:
-  eval_freq: 25  # Evaluate every 25 rounds (as per paper)
+  eval_freq: 2  # Evaluate every 25 rounds (as per paper)
   metric: accuracy
   save_best_model: true
 

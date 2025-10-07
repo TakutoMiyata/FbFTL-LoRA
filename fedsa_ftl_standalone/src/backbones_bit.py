@@ -28,9 +28,14 @@ class LoRAConv2d(nn.Module):
 
         self.base = base_conv
         in_c, out_c = base_conv.in_channels, base_conv.out_channels
+        
+        # Inherit stride and padding from base convolution
+        stride = base_conv.stride
+        padding = base_conv.padding
 
         # LoRA matrices: A (down-projection) and B (up-projection)
-        self.lora_A = nn.Conv2d(in_c, r, kernel_size=1, bias=False)
+        # Must match the base conv's stride and padding to ensure output dimensions match
+        self.lora_A = nn.Conv2d(in_c, r, kernel_size=1, stride=stride, padding=padding, bias=False)
         self.lora_B = nn.Conv2d(r, out_c, kernel_size=1, bias=False)
 
         self.scaling = alpha / float(r) if r > 0 else 0

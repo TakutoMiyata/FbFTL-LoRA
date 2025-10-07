@@ -46,8 +46,16 @@ class TFFCifar100Dataset(Dataset):
             images = batch['image'].numpy()
             labels = batch['label'].numpy()
 
-            self.images.append(images)
-            self.labels.append(labels)
+            # Handle both batched and unbatched data
+            if images.ndim == 3:  # Single image (H, W, C)
+                self.images.append(images[np.newaxis, ...])  # Add batch dimension
+            else:  # Batched images (N, H, W, C)
+                self.images.append(images)
+            
+            if labels.ndim == 0:  # Single label (scalar)
+                self.labels.append(np.array([labels]))  # Convert to 1D array
+            else:  # Batched labels (N,)
+                self.labels.append(labels)
 
         # Concatenate all batches
         if self.images:

@@ -1029,8 +1029,8 @@ def main():
         # FedSA-LoRA Server aggregation (A matrices only)
         aggregation_method = config['federated'].get('aggregation_method', 'fedsa')
         
-        if aggregation_method not in ['fedsa_shareA_dp', 'fedsa']:
-            raise ValueError(f"Unsupported aggregation method: {aggregation_method}. This script only supports 'fedsa' and 'fedsa_shareA_dp'. Use quickstart_resnet_fedavg.py for standard FedAvg.")
+        if aggregation_method not in ['fedsa_shareA_dp', 'fedsa', 'fedsa_shareA']:
+            raise ValueError(f"Unsupported aggregation method: {aggregation_method}. This script only supports 'fedsa', 'fedsa_shareA', and 'fedsa_shareA_dp'. Use quickstart_resnet_fedavg.py for standard FedAvg.")
         
         # FedSA: aggregate only A matrices
         client_A_params = [update['A_params'] for update in client_updates]

@@ -16,8 +16,31 @@ import json
 import time
 from datetime import datetime
 
+# Set GPU device BEFORE any CUDA operations
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+
+# Configure TensorFlow to not hog all GPU memory
+os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
+os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
+
 # Disable tqdm globally BEFORE importing
 os.environ['TQDM_DISABLE'] = '1'
+
+# Import and configure TensorFlow BEFORE any other imports
+import tensorflow as tf
+# Limit TensorFlow to only 2GB of GPU memory
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+            # Set memory limit to 2GB for TensorFlow
+            tf.config.set_logical_device_configuration(
+                gpu,
+                [tf.config.LogicalDeviceConfiguration(memory_limit=2048)])
+        print(f"✅ TensorFlow GPU memory limited to 2GB, growth enabled")
+    except RuntimeError as e:
+        print(f"⚠️  TensorFlow GPU configuration error: {e}")
 
 from tqdm import tqdm
 
