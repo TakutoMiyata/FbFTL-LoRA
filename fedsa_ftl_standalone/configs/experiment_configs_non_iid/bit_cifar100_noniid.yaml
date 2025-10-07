@@ -1,24 +1,25 @@
-# BiT (Big Transfer) with TFF CIFAR-100 IID Configuration
-# IID setting: Aggregate all client data and redistribute uniformly
-# Addresses overfitting with lower LR, stronger regularization, and data augmentation
+# BiT (Big Transfer) with Standard CIFAR-100 Non-IID Configuration
+# Uses Dirichlet distribution (alpha=0.5) for non-IID split
+# Optimized for low-data regime with regularization
 
 seed: 42
 use_gpu: true
 use_amp: false
 
 data:
-  dataset_name: cifar100  # Standard CIFAR-100 (not TFF)
+  dataset_name: cifar100  # Standard CIFAR-100
   data_dir: ./data
   num_clients: 10
-  num_test_clients: 10  # Same as training clients for standard CIFAR-100
+  num_test_clients: 10
   batch_size: 64
   num_workers: 4
   pin_memory: true
   input_size: 224
   verbose: false
   imagenet_style: true  # Use ImageNet transforms for BiT
-  # IID-specific: use standard CIFAR-100 with IID split
-  data_split: iid  # Use IID split from data_utils
+  # Non-IID specific settings
+  data_split: non_iid  # Use non-IID split with Dirichlet distribution
+  alpha: 0.5  # Dirichlet parameter (smaller = more heterogeneous)
   seed: 42
   augmentations:
     horizontal_flip:
@@ -93,13 +94,13 @@ evaluation:
   save_best_model: true
 
 experiment:
-  name: BiT_TFF_CIFAR100_IID_FedSA_LowLR
+  name: BiT_CIFAR100_NonIID_FedSA
   output_dir: experiments/quickstart_bit_tff
   save_history: true
   save_model: true
   log_interval: 10
   use_wandb: false
-  wandb_project: bit-tff-fedsa-iid
+  wandb_project: bit-cifar100-fedsa-noniid
   wandb_entity: null
 
 reproducibility:
