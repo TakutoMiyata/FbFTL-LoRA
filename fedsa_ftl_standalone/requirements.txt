@@ -12,4 +12,6 @@ tensorboard>=2.13.0
 requests>=2.31.0
 opacus>=1.4.0  # For efficient DP-SGD implementation
 pandas>=1.5.0  # For CSV export of results
-timm>=0.9.0  # For pre-trained ViT models
+timm>=0.9.0  # For pre-trained ViT and BiT models
+tensorflow>=2.13.0  # For TensorFlow Federated
+tensorflow-federated>=0.60.0  # For hierarchical LDA non-IID CIFAR-100 dataset
