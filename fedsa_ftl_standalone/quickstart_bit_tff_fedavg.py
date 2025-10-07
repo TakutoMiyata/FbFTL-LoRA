@@ -829,13 +829,14 @@ def main():
             else:
                 return 4
 
-        total_bytes = sum(p.numel() * get_bytes_per_param(p) for p in aggregated_A.values())
+        # FedAvg: Calculate communication cost for ALL trainable parameters
+        total_bytes = sum(p.numel() * get_bytes_per_param(p) for p in aggregated_params.values())
         communication_cost_mb = total_bytes / (1024 * 1024)
 
-        total_A_params = sum(p.numel() for p in aggregated_A.values())
+        total_params = sum(p.numel() for p in aggregated_params.values())
 
         for i, update in enumerate(client_updates):
-            if 'upload_type' in update and update['upload_type'] != 'A_matrices_only':
+            if 'upload_type' in update and update['upload_type'] != 'all_trainable_parameters':
                 print(f"WARNING: Client {i} uploaded unexpected parameters!")
 
         current_epsilon = None
@@ -857,7 +858,7 @@ def main():
 
         round_stats = {
             'communication_cost_mb': communication_cost_mb,
-            'aggregated_params': total_A_params,
+            'aggregated_params': total_params,
             'aggregation_method': aggregation_method
         }
 
@@ -870,12 +871,12 @@ def main():
 
         is_new_best = False
         if is_eval_round and test_accuracies is not None:
-            print(f"  Avg Personalized Test Accuracy: {avg_personalized_acc:.2f}%")
+            print(f"  Avg Test Accuracy (FedAvg global model): {avg_personalized_acc:.2f}%")
             if avg_personalized_acc > best_accuracy:
                 best_accuracy = avg_personalized_acc
                 best_round = round_idx + 1
                 is_new_best = True
-                print(f"  ** New best personalized accuracy! **")
+                print(f"  ** New best test accuracy! **")
 
         print(f"  Communication Cost (per-round): {round_stats.get('communication_cost_mb', 0):.2f} MB")
         print(f"  Round time: {round_time:.2f}s")
