@@ -268,6 +268,7 @@ def redistribute_iid(datasets: Dict[str, TFFCifar100Dataset],
                      seed: int = 42) -> Dict[str, TFFCifar100Dataset]:
     """
     Redistribute TFF data uniformly to create IID clients
+    Uses the same IID splitting logic as data_utils.create_iid_splits()
 
     Args:
         datasets: Original non-IID datasets
@@ -279,7 +280,7 @@ def redistribute_iid(datasets: Dict[str, TFFCifar100Dataset],
     """
     print(f"\n🔄 Redistributing data for IID (uniform distribution)...")
 
-    # Aggregate all data
+    # Aggregate all data into a single combined dataset
     all_images = []
     all_labels = []
 
@@ -293,25 +294,23 @@ def redistribute_iid(datasets: Dict[str, TFFCifar100Dataset],
     total_samples = len(all_images)
     print(f"  Total samples: {total_samples}")
 
-    # Shuffle with seed
+    # Use same IID splitting logic as data_utils.create_iid_splits()
     np.random.seed(seed)
-    indices = np.random.permutation(total_samples)
-    all_images = all_images[indices]
-    all_labels = all_labels[indices]
+    indices = np.arange(total_samples)
+    np.random.shuffle(indices)
 
-    # Split uniformly
-    samples_per_client = total_samples // num_clients
+    # Split evenly among clients (same as create_iid_splits)
+    splits = np.array_split(indices, num_clients)
+
     iid_datasets = {}
+    reference_transform = list(datasets.values())[0].transform
 
-    for i in range(num_clients):
-        start_idx = i * samples_per_client
-        end_idx = (i + 1) * samples_per_client if i < num_clients - 1 else total_samples
-
+    for i, split_indices in enumerate(splits):
         # Create new dataset for this client
         client_dataset = TFFCifar100Dataset.__new__(TFFCifar100Dataset)
-        client_dataset.images = all_images[start_idx:end_idx].tolist()
-        client_dataset.labels = all_labels[start_idx:end_idx].tolist()
-        client_dataset.transform = list(datasets.values())[0].transform  # Copy transform
+        client_dataset.images = [all_images[idx] for idx in split_indices]
+        client_dataset.labels = [all_labels[idx] for idx in split_indices]
+        client_dataset.transform = reference_transform
 
         iid_datasets[f"iid_client_{i}"] = client_dataset
 
@@ -320,6 +319,7 @@ def redistribute_iid(datasets: Dict[str, TFFCifar100Dataset],
         print(f"  Client {i}: {len(client_dataset.labels)} samples, {len(unique)} classes")
 
     print(f"✅ IID redistribution complete: {num_clients} clients with uniform distribution")
+    print(f"   (Using same logic as data_utils.create_iid_splits)")
     return iid_datasets
 
 
