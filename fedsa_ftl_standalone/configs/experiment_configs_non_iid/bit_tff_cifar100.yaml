@@ -1,5 +1,6 @@
 # BiT (Big Transfer) with TFF CIFAR-100 Non-IID Configuration
-# Follows experimental setup: 200 rounds, 25 round evaluation, 5-10 training clients, 30 test clients
+# Follows experimental setup: 200 rounds, 25 round evaluation, 5-10 training clients
+# Note: TFF uses same client IDs for train and test (each client has ~100 train + ~100 test samples)
 
 seed: 42
 use_gpu: true
@@ -9,7 +10,7 @@ data:
   dataset_name: tff_cifar100
   data_dir: ./data
   num_clients: 10  # Training clients (5 or 10 as per paper)
-  num_test_clients: 30  # Fixed 30 test clients
+  num_test_clients: 10  # Same as num_clients (TFF convention: same IDs for train/test)
   batch_size: 64
   num_workers: 4
   pin_memory: true

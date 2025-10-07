@@ -723,8 +723,14 @@ def main():
             personalized_results = []
             personalized_accuracies = []
             for client_idx in selected_clients:
-                tff_test_id = test_client_ids[client_idx] if client_idx < len(test_client_ids) else test_client_ids[0]
-                test_dataset = test_datasets[tff_test_id]
+                # Use same client ID for train and test (TFF convention)
+                tff_test_id = train_client_ids[client_idx]
+                test_dataset = test_datasets.get(tff_test_id)
+
+                if test_dataset is None:
+                    print(f"    Warning: No test data for client {client_idx} (ID: {tff_test_id}), skipping")
+                    continue
+
                 client_test_dataloader = get_tff_dataloader(
                     test_dataset,
                     batch_size=config['data']['batch_size'],
@@ -735,7 +741,7 @@ def main():
                 test_result = clients[client_idx].evaluate(client_test_dataloader)
                 personalized_results.append(test_result)
                 personalized_accuracies.append(test_result['accuracy'])
-                print(f"    Client {client_idx}: {test_result['accuracy']:.2f}%")
+                print(f"    Client {client_idx} (TFF ID: {tff_test_id}): {test_result['accuracy']:.2f}%")
 
             avg_personalized_acc = sum(personalized_accuracies) / len(personalized_accuracies)
             print(f"  Average Personalized Accuracy: {avg_personalized_acc:.2f}%")

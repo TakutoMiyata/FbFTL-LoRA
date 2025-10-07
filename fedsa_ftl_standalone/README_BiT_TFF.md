@@ -10,7 +10,8 @@
   - 200 rounds
   - 25 round毎に評価
   - 5または10 training clients
-  - 30 test clients（固定）
+  - 各クライアント: ~100 train samples + ~100 test samples
+  - **重要**: 訓練とテストで同じクライアントIDを使用（Non-IID一貫性）
 
 ## セットアップ
 
@@ -191,9 +192,10 @@ TFF CIFAR-100は以下の特徴を持つnon-IIDデータセット:
 ### データ統計
 
 - Training clients: 500 (内5-10を使用)
-- Test clients: 100 (内30を固定選択)
+- **各クライアント**: 訓練100サンプル + テスト100サンプル
 - Classes: 100
 - Input size: 224×224 (BiT用にリサイズ)
+- **重要**: 訓練とテストで同じクライアントIDを使用することで、Non-IID特性を維持
 
 ## BiTモデルについて
 

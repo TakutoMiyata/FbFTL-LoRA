@@ -326,9 +326,13 @@ def prepare_tff_federated_data(config: Dict):
         if isinstance(aug_config, dict)
     )
 
-    # Select clients
+    # Select clients (use same IDs for train and test to maintain non-IID consistency)
     train_client_ids = select_training_clients(num_train_clients, seed)
-    test_client_ids = select_fixed_test_clients(num_test_clients, seed)
+    # Use same client IDs for test data (TFF convention: same client has both train and test splits)
+    test_client_ids = train_client_ids
+
+    print(f"\n📊 Using same client IDs for train and test (TFF convention)")
+    print(f"   Selected {len(train_client_ids)} clients: {train_client_ids[:5]}{'...' if len(train_client_ids) > 5 else ''}")
 
     # Load data
     train_datasets, test_datasets, client_info = load_tff_cifar100(
@@ -345,7 +349,8 @@ def prepare_tff_federated_data(config: Dict):
 
     print(f"\n✅ TFF CIFAR-100 data prepared:")
     print(f"  Training clients: {num_train_clients}")
-    print(f"  Test clients: {num_test_clients}")
+    print(f"  Test clients: {num_train_clients} (same as training)")
     print(f"  Split method: Hierarchical LDA (non-IID)")
+    print(f"  Each client has ~100 train samples + ~100 test samples")
 
     return train_datasets, test_datasets, client_info
