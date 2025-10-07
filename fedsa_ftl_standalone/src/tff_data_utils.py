@@ -162,8 +162,12 @@ def load_tff_cifar100(train_client_ids: Optional[List[str]] = None,
 
     print(f"Creating PyTorch datasets for {len(test_client_ids)} test clients...")
     for client_id in test_client_ids:
-        client_data = test_data.create_tf_dataset_for_client(client_id)
-        test_datasets[client_id] = TFFCifar100Dataset(client_data, transform=test_transform)
+        # Check if client exists in test data
+        if client_id in all_test_ids:
+            client_data = test_data.create_tf_dataset_for_client(client_id)
+            test_datasets[client_id] = TFFCifar100Dataset(client_data, transform=test_transform)
+        else:
+            print(f"  Warning: Client {client_id} not found in test data, skipping test dataset")
 
     # Collect metadata
     client_info = {
@@ -326,13 +330,16 @@ def prepare_tff_federated_data(config: Dict):
         if isinstance(aug_config, dict)
     )
 
-    # Select clients (use same IDs for train and test to maintain non-IID consistency)
+    # Select clients
+    # Note: TFF train and test client IDs are separate (train: 500 clients, test: 100 clients)
     train_client_ids = select_training_clients(num_train_clients, seed)
-    # Use same client IDs for test data (TFF convention: same client has both train and test splits)
-    test_client_ids = train_client_ids
+    # For test, select fixed 30 clients from test pool (100 test clients)
+    test_client_ids = select_fixed_test_clients(min(30, num_test_clients), seed)
 
-    print(f"\n📊 Using same client IDs for train and test (TFF convention)")
-    print(f"   Selected {len(train_client_ids)} clients: {train_client_ids[:5]}{'...' if len(train_client_ids) > 5 else ''}")
+    print(f"\n📊 Client selection:")
+    print(f"   Training: {len(train_client_ids)} clients from 500 train pool")
+    print(f"   Testing: {len(test_client_ids)} clients from 100 test pool (fixed)")
+    print(f"   Note: TFF has separate train/test client pools with different IDs")
 
     # Load data
     train_datasets, test_datasets, client_info = load_tff_cifar100(
@@ -348,9 +355,9 @@ def prepare_tff_federated_data(config: Dict):
         analyze_tff_distribution(test_datasets, "test")
 
     print(f"\n✅ TFF CIFAR-100 data prepared:")
-    print(f"  Training clients: {num_train_clients}")
-    print(f"  Test clients: {num_train_clients} (same as training)")
+    print(f"  Training clients: {num_train_clients} (from 500 train pool)")
+    print(f"  Test clients: {len(test_client_ids)} (from 100 test pool)")
     print(f"  Split method: Hierarchical LDA (non-IID)")
-    print(f"  Each client has ~100 train samples + ~100 test samples")
+    print(f"  Each client has ~100 samples")
 
     return train_datasets, test_datasets, client_info

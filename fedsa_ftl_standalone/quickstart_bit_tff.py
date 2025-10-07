@@ -718,30 +718,47 @@ def main():
         is_eval_round = (round_idx + 1) % config.get('evaluation', {}).get('eval_freq', 25) == 0
 
         if is_eval_round:
-            print("\nEvaluating models on test clients...")
+            print("\nEvaluating personalized models (each training client on fixed test set)...")
+
+            # FedSA-LoRA: No global model exists (only A matrices are shared)
+            # Each training client has personalized model (A_shared + B_local + classifier_local)
+            # Evaluate each training client's personalized model on fixed test set
 
             personalized_results = []
             personalized_accuracies = []
+
+            # Create a single combined test dataloader from all test clients
+            # This simulates evaluating on a "global test set"
+            all_test_samples = []
+            for test_id in test_client_ids:
+                test_dataset = test_datasets[test_id]
+                all_test_samples.extend([(test_dataset[i][0], test_dataset[i][1]) for i in range(len(test_dataset))])
+
+            # Create a simple dataset wrapper
+            class CombinedTestDataset(torch.utils.data.Dataset):
+                def __init__(self, samples):
+                    self.samples = samples
+                def __len__(self):
+                    return len(self.samples)
+                def __getitem__(self, idx):
+                    return self.samples[idx]
+
+            combined_test_dataset = CombinedTestDataset(all_test_samples)
+            combined_test_loader = get_tff_dataloader(
+                combined_test_dataset,
+                batch_size=config['data']['batch_size'],
+                shuffle=False,
+                num_workers=config['data'].get('num_workers', 0)
+            )
+
+            print(f"  Combined test set: {len(all_test_samples)} samples from {len(test_client_ids)} test clients")
+
             for client_idx in selected_clients:
-                # Use same client ID for train and test (TFF convention)
-                tff_test_id = train_client_ids[client_idx]
-                test_dataset = test_datasets.get(tff_test_id)
-
-                if test_dataset is None:
-                    print(f"    Warning: No test data for client {client_idx} (ID: {tff_test_id}), skipping")
-                    continue
-
-                client_test_dataloader = get_tff_dataloader(
-                    test_dataset,
-                    batch_size=config['data']['batch_size'],
-                    shuffle=False,
-                    num_workers=config['data'].get('num_workers', 0)
-                )
-
-                test_result = clients[client_idx].evaluate(client_test_dataloader)
+                # Evaluate this training client's personalized model on combined test set
+                test_result = clients[client_idx].evaluate(combined_test_loader)
                 personalized_results.append(test_result)
                 personalized_accuracies.append(test_result['accuracy'])
-                print(f"    Client {client_idx} (TFF ID: {tff_test_id}): {test_result['accuracy']:.2f}%")
+                print(f"    Training Client {client_idx} (personalized): {test_result['accuracy']:.2f}%")
 
             avg_personalized_acc = sum(personalized_accuracies) / len(personalized_accuracies)
             print(f"  Average Personalized Accuracy: {avg_personalized_acc:.2f}%")
