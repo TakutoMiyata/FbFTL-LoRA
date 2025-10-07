@@ -12,9 +12,9 @@ communication:
   compression_ratio: 0.1
   quantization_bits: null
 data:
-  alpha: 0.5
+  alpha: 0.1
   dataset_name: cifar100
-  data_split: iid
+  data_split: non_iid
   input_size: 224
   imagenet_style: true
   batch_size: 64
@@ -62,8 +62,9 @@ evaluation:
   save_best_model: true
 experiment:
   log_interval: 10
-  name: FedSA_LoRA_MobileNetV2_CIFAR100_IID
-  output_dir: experiments/quickstart_resnet_iid
+  name: FedSA_r8al8
+  output_dir: experiments/change_r/r8al8
+  run_name: null
   save_history: true
   save_model: true
   use_wandb: false
@@ -72,7 +73,7 @@ experiment:
 federated:
   aggregation_method: fedsa
   checkpoint_freq: 25
-  client_fraction: 0.3
+  client_fraction: 1.0
   num_clients: 10
   num_rounds: 100
   exclude_bn_from_agg: true
@@ -84,7 +85,7 @@ model:
   lora:
     enabled: true
     r: 8
-    alpha: 16
+    alpha: 8
     dropout: 0.1
 privacy:
   delta: 1.0e-05
@@ -99,8 +100,8 @@ reproducibility:
 seed: 42
 training:
   epochs: 2
-  lr: 0.00075  # Increased for faster convergence with LoRA and new classifier
-  weight_decay: 0.0005  # Reduced to allow better learning
+  lr: 0.001
+  weight_decay: 0.0005
   scheduler: cosine
   warmup_epochs: 0
   label_smoothing: 0.1

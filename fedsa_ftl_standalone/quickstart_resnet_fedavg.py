@@ -20,6 +20,22 @@ import time
 from datetime import datetime
 from tqdm import tqdm
 
+# GradScaler and autocast compatibility for different PyTorch versions
+try:
+    # PyTorch 2.0+
+    from torch.amp import GradScaler, autocast
+    def create_grad_scaler(device='cuda'):
+        return GradScaler(device)
+    def create_autocast(device='cuda', enabled=True):
+        return autocast(device, enabled=enabled)
+except (ImportError, AttributeError):
+    # PyTorch 1.x
+    from torch.cuda.amp import GradScaler, autocast
+    def create_grad_scaler(device='cuda'):
+        return GradScaler()
+    def create_autocast(device='cuda', enabled=True):
+        return autocast(enabled=enabled)
+
 # Load environment variables from .env file
 def load_env_file(env_path='.env'):
     """Load environment variables from .env file"""
@@ -90,7 +106,7 @@ class FedAvgClient:
         )
         
         # Setup AMP scaler
-        scaler = torch.amp.GradScaler('cuda') if torch.cuda.is_available() else None
+        scaler = create_grad_scaler('cuda') if torch.cuda.is_available() else None
         
         num_epochs = training_config.get('epochs', 3)
         total_loss = 0
@@ -117,7 +133,7 @@ class FedAvgClient:
                 optimizer.zero_grad()
                 
                 # Use autocast for forward pass
-                with torch.amp.autocast('cuda', enabled=scaler is not None):
+                with create_autocast('cuda', enabled=scaler is not None):
                     output = self.model(data)
                     
                     # Handle Mixup/CutMix targets
@@ -194,7 +210,7 @@ class FedAvgClient:
                 data, target = data.to(self.device), target.to(self.device)
                 
                 # Use autocast for forward pass in evaluation
-                with torch.cuda.amp.autocast():
+                with create_autocast('cuda', enabled=True):
                     output = self.model(data)
                     test_loss += F.cross_entropy(output, target, reduction='sum').item()
                     pred = output.argmax(dim=1, keepdim=True)

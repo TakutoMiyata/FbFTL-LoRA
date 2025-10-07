@@ -14,7 +14,7 @@ communication:
 data:
   alpha: 0.5
   dataset_name: cifar100
-  data_split: iid
+  data_split: non_iid
   input_size: 224
   imagenet_style: true
   batch_size: 64
@@ -56,14 +56,14 @@ data:
       enabled: true
       scale_min: 0.5
 evaluation:
-  eval_freq: 2
+  eval_freq: 1
   metric: accuracy
   patience: 30
   save_best_model: true
 experiment:
   log_interval: 10
-  name: FedSA_LoRA_MobileNetV2_CIFAR100_IID
-  output_dir: experiments/quickstart_resnet_iid
+  name: FedSA_LoRA_MobileNetV2_CIFAR10_non_IID
+  output_dir: experiments/cifar10/quickstart_resnet_non_iid
   save_history: true
   save_model: true
   use_wandb: false
@@ -99,13 +99,13 @@ reproducibility:
 seed: 42
 training:
   epochs: 2
-  lr: 0.00075  # Increased for faster convergence with LoRA and new classifier
+  lr: 0.001  # Increased for faster convergence with LoRA and new classifier
   weight_decay: 0.0005  # Reduced to allow better learning
   scheduler: cosine
   warmup_epochs: 0
   label_smoothing: 0.1
   gradient_clip: 1.0
-  optimizer: sgd
+  optimizer: adamw
   momentum: 0.9
   microbatch_size: 32
 use_gpu: true

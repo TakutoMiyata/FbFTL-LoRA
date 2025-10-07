@@ -17,7 +17,7 @@ data:
   data_split: non_iid
   input_size: 224
   imagenet_style: true
-  batch_size: 128
+  batch_size: 64
   data_dir: ./data
   model_type: imagenet
   num_clients: 10
@@ -62,8 +62,8 @@ evaluation:
   save_best_model: true
 experiment:
   log_interval: 10
-  name: FedSA_LoRA_MobileNetV2_CIFAR100_IID
-  output_dir: experiments/quickstart_resnet_iid/epsilon4
+  name: FedSA_LoRA_MobileNetV2_CIFAR100_non_IID
+  output_dir: experiments/quickstart_resnet_non_iid/epsilon4
   save_history: true
   save_model: true
   use_wandb: false
@@ -92,7 +92,7 @@ privacy:
   epsilon: 4.0
   max_grad_norm: 1.0
   # noise_multiplier: 2.8   # ε≈2 を狙う
-  noise_multiplier: 2.0 # ε≈4 を狙う
+  noise_multiplier: 2.3 # ε≈4 を狙う
   # noise_multiplier: 0.7 # ε≈8 を狙う
   # noise_multiplier: 0.35# ε≈16 を狙う
   target: lora_A
@@ -102,14 +102,14 @@ reproducibility:
 seed: 42
 training:
   epochs: 2
-  lr: 0.001  # Scaled with larger batch size (256)
-  weight_decay: 0.001
+  lr: 0.00075  # Scaled with larger batch size (256)
+  weight_decay: 0.0005
   scheduler: cosine
   warmup_epochs: 0
   label_smoothing: 0.1
   gradient_clip: 1.0
   optimizer: sgd
   momentum: 0.9
-  microbatch_size: 8
+  microbatch_size: 32
 use_gpu: true
 use_amp: false

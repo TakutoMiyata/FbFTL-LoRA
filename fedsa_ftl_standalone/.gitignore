@@ -165,3 +165,5 @@ wandb/
 # Output files
 *.out
 nohup.out
+
+*.pyc

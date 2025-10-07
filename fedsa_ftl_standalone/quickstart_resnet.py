@@ -39,6 +39,22 @@ except ImportError:
     clear_grad_sample = None
     print("Warning: Opacus not available. Install with: pip install opacus")
 
+# GradScaler compatibility for different PyTorch versions
+try:
+    # PyTorch 2.0+ uses torch.amp.GradScaler and torch.amp.autocast
+    from torch.amp import GradScaler, autocast
+    def create_grad_scaler(device='cuda'):
+        return GradScaler(device)
+    def create_autocast(device='cuda', enabled=True):
+        return autocast(device, enabled=enabled)
+except (ImportError, AttributeError):
+    # PyTorch 1.x uses torch.cuda.amp.GradScaler and torch.cuda.amp.autocast
+    from torch.cuda.amp import GradScaler, autocast
+    def create_grad_scaler(device='cuda'):
+        return GradScaler()
+    def create_autocast(device='cuda', enabled=True):
+        return autocast(enabled=enabled)
+
 
 def manual_clear_grad_sample(model):
     """
@@ -175,11 +191,6 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         
         # Get training configuration
         training_config = config.get('training', {})
-        opt_kwargs = dict(
-            lr=training_config.get('lr', 0.001),
-            momentum=training_config.get('momentum', 0.9),
-            weight_decay=training_config.get('weight_decay', 0.0001)
-        )
         
         if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp':
             # Separate A and B parameters
@@ -195,14 +206,34 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
 
             self.local_params = self.B_params + cls_params
             
+            # Print parameter statistics
+            num_A_tensors = len(self.A_params)
+            num_A_elements = sum(p.numel() for p in self.A_params)
+            num_B_tensors = len(self.B_params)
+            num_B_elements = sum(p.numel() for p in self.B_params)
+            num_cls_tensors = len(cls_params)
+            num_cls_elements = sum(p.numel() for p in cls_params)
+            
+            print(f"Client {client_id}: Separated optimizers (DP mode)")
+            print(f"  A params: {num_A_tensors} tensors ({num_A_elements:,} elements)")
+            print(f"  B params: {num_B_tensors} tensors ({num_B_elements:,} elements)")
+            print(f"  Classifier: {num_cls_tensors} tensors ({num_cls_elements:,} elements)")
+            print(f"  Local (B+cls): {len(self.local_params)} tensors ({num_B_elements + num_cls_elements:,} elements)")
+            
             # Safety check for local parameters
             if len(self.local_params) == 0:
-                print(f"Warning: client {client_id} has no local_params (B+classifier). Check head detection.")
+                print(f"⚠️  Warning: client {client_id} has no local_params (B+classifier). Check head detection.")
                 print(f"  Model has: classifier={hasattr(model, 'classifier')}, fc={hasattr(model, 'fc')}, head={hasattr(model, 'head')}")
 
-            # Create optimizers for A-only and B+classifier
-            self.dp_optimizer = torch.optim.SGD(self.A_params, **opt_kwargs)
-            self.local_optimizer = torch.optim.SGD(self.local_params, **opt_kwargs)
+            # Create optimizers for A-only and B+classifier using parent class method
+            # Temporarily create config dicts for each parameter group
+            A_config = training_config.copy()
+            B_config = training_config.copy()
+            
+            # Create optimizer for A parameters
+            self.dp_optimizer = self._create_optimizer_for_params(self.A_params, A_config)
+            # Create optimizer for B+classifier parameters
+            self.local_optimizer = self._create_optimizer_for_params(self.local_params, B_config)
 
             if OPACUS_AVAILABLE:
                 self.privacy_engine = PrivacyEngine()
@@ -219,9 +250,12 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         else:
             # Standard single optimizer for all trainable parameters
             trainable_params = [p for p in model.parameters() if p.requires_grad]
-            print(f"Client {client_id}: Single optimizer tracking {len(trainable_params)} trainable parameters")
+            num_param_tensors = len(trainable_params)
+            num_param_elements = sum(p.numel() for p in trainable_params)
+            print(f"Client {client_id}: Single optimizer tracking {num_param_tensors} parameter tensors ({num_param_elements:,} elements)")
             
-            self.optimizer = torch.optim.SGD(trainable_params, **opt_kwargs)
+            # Use helper method to create optimizer based on config
+            self.optimizer = self._create_optimizer_for_params(trainable_params, training_config)
             
             # No DP or separated optimizers
             self.dp_optimizer = None
@@ -238,6 +272,43 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
         
         # Initial cleanup: ensure model starts without any grad_sample artifacts
         comprehensive_grad_sample_cleanup(self.model, verbose=False)
+    
+    def _create_optimizer_for_params(self, params, training_config):
+        """
+        Create optimizer for given parameters based on training configuration.
+        Uses the same logic as parent class _get_optimizer method.
+        
+        Args:
+            params: List of parameters to optimize
+            training_config: Training configuration dict
+        
+        Returns:
+            Optimizer instance
+        """
+        lr = float(training_config.get('lr', 0.001))
+        weight_decay = float(training_config.get('weight_decay', 0.0001))
+        optimizer_type = training_config.get('optimizer', 'sgd').lower()
+        
+        if optimizer_type == 'sgd':
+            momentum = float(training_config.get('momentum', 0.9))
+            optimizer = torch.optim.SGD(params, lr=lr, momentum=momentum, weight_decay=weight_decay)
+            print(f"  Created SGD optimizer: lr={lr}, momentum={momentum}, weight_decay={weight_decay}")
+        elif optimizer_type == 'adamw':
+            betas = tuple(training_config.get('betas', [0.9, 0.999]))
+            eps = float(training_config.get('eps', 1e-8))
+            optimizer = torch.optim.AdamW(params, lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
+            print(f"  Created AdamW optimizer: lr={lr}, betas={betas}, eps={eps}, weight_decay={weight_decay}")
+        elif optimizer_type == 'adam':
+            betas = tuple(training_config.get('betas', [0.9, 0.999]))
+            eps = float(training_config.get('eps', 1e-8))
+            optimizer = torch.optim.Adam(params, lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
+            print(f"  Created Adam optimizer: lr={lr}, betas={betas}, eps={eps}, weight_decay={weight_decay}")
+        else:
+            print(f"  Warning: Unknown optimizer '{optimizer_type}', using SGD")
+            momentum = float(training_config.get('momentum', 0.9))
+            optimizer = torch.optim.SGD(params, lr=lr, momentum=momentum, weight_decay=weight_decay)
+        
+        return optimizer
     
     def _unwrap(self):
         """Unwrap Opacus GradSampleModule to access original model methods"""
@@ -273,7 +344,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
 
         # AMP は DP 無効時のみ
         model_is_half = next(self.model.parameters()).dtype == torch.float16
-        scaler = torch.amp.GradScaler('cuda') if (self.use_amp and torch.cuda.is_available() and not model_is_half) else None
+        scaler = create_grad_scaler('cuda') if (self.use_amp and torch.cuda.is_available() and not model_is_half) else None
 
         for epoch in range(num_epochs):
             epoch_loss = 0.0
@@ -323,7 +394,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                     self.dp_optimizer.zero_grad()
                     self.local_optimizer.zero_grad()
 
-                    with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
+                    with create_autocast('cuda', enabled=self.use_amp and scaler is not None):
                         output = self.model(data)
                     if len(target.shape) > 1:
                         loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
@@ -337,7 +408,7 @@ class ResNetFedSAFTLClient(FedSAFTLClient):
                 else:
                     # 標準 FedSA/FedAvg の場合（単一 optimizer）
                     self.optimizer.zero_grad()
-                    with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
+                    with create_autocast('cuda', enabled=self.use_amp and scaler is not None):
                         output = self.model(data)
                     if len(target.shape) > 1:
                         loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()
@@ -481,6 +552,8 @@ def main():
                        help='Override number of clients')
     parser.add_argument('--model', type=str, choices=['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152'], 
                        default=None, help='Override ResNet model variant')
+    parser.add_argument('--gpu_id', type=int, default=None,
+                       help='GPU device ID to use (0, 1, 2, etc.)')
     
     args = parser.parse_args()
     
@@ -588,14 +661,36 @@ def main():
     if args.model:
         config['model']['model_name'] = args.model
     
-    # Set device
-    device = torch.device('cuda' if config.get('use_gpu', False) and torch.cuda.is_available() else 'cpu')
+    # Set device with explicit GPU ID support
+    if args.gpu_id is not None:
+        # If GPU ID is specified, use that specific GPU
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu_id)
+        # Force re-check of CUDA availability after setting environment
+        if torch.cuda.is_available():
+            device = torch.device('cuda:0')
+            print(f"✅ Using specified GPU {args.gpu_id} (mapped to cuda:0)")
+            print(f"   GPU Name: {torch.cuda.get_device_name(0)}")
+            print(f"   GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+        else:
+            device = torch.device('cpu')
+            print(f"⚠️  GPU {args.gpu_id} specified but CUDA not available, using CPU")
+    else:
+        # Use default GPU detection
+        device = torch.device('cuda' if config.get('use_gpu', False) and torch.cuda.is_available() else 'cpu')
+        if device.type == 'cuda':
+            print(f"✅ Using default GPU detection")
+            print(f"   Available GPUs: {torch.cuda.device_count()}")
+            print(f"   Current GPU: {torch.cuda.get_device_name(0)}")
+        else:
+            print("ℹ️  Using CPU")
     
     print("=" * 80)
     print("FedSA-LoRA ResNet Federated Learning (A matrices only)")
     print("=" * 80)
     print(f"Configuration: {config_path}")
     print(f"Device: {device}")
+    if args.gpu_id is not None:
+        print(f"GPU ID: {args.gpu_id}")
     print(f"Model: {config['model']['model_name']}")
     print(f"Dataset: {config['data']['dataset_name'].upper()}")
     print(f"Clients: {config['federated']['num_clients']}")

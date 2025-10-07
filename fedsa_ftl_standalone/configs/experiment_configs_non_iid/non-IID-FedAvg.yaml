@@ -18,7 +18,7 @@ data:
   data_split: non_iid
   input_size: 224
   imagenet_style: true
-  batch_size: 256  # Further optimized for TITAN V (12GB VRAM)
+  batch_size: 64
   data_dir: ./data
   model_type: imagenet
   num_clients: 10
@@ -63,8 +63,8 @@ evaluation:
 
 experiment:
   log_interval: 10
-  name: FedAvg_MobileNetV2_CIFAR100_IID
-  output_dir: experiments/quickstart_resnet_fedavg_iid
+  name: FedAvg_MobileNetV2_CIFAR100_non_IID
+  output_dir: experiments/quickstart_resnet_fedavg_non_iid
   save_history: true
   save_model: true
   use_wandb: false
@@ -106,15 +106,15 @@ seed: 42
 
 training:
   epochs: 2
-  lr: 0.001  # Scaled with larger batch size (256)
-  weight_decay: 0.001
+  lr: 0.00075  # Scaled with larger batch size (256)
+  weight_decay: 0.0005
   scheduler: cosine
   warmup_epochs: 0
   label_smoothing: 0.1
   gradient_clip: 1.0
   optimizer: sgd
   momentum: 0.9
-  microbatch_size: 8
+  microbatch_size: 32
 
 use_gpu: true
 use_amp: true

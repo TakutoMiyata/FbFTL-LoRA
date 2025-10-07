@@ -17,7 +17,7 @@ data:
   data_split: iid
   input_size: 224
   imagenet_style: true
-  batch_size: 128
+  batch_size: 64
   data_dir: ./data
   model_type: imagenet
   num_clients: 10
@@ -110,6 +110,6 @@ training:
   gradient_clip: 1.0
   optimizer: sgd
   momentum: 0.9
-  microbatch_size: 8
+  microbatch_size: 32
 use_gpu: true
 use_amp: false

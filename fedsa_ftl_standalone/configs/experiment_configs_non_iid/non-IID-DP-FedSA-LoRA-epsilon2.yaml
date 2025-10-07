@@ -12,12 +12,12 @@ communication:
   compression_ratio: 0.1
   quantization_bits: null
 data:
-  alpha: 10.0
+  alpha: 0.5
   dataset_name: cifar100
   data_split: non_iid
   input_size: 224
   imagenet_style: true
-  batch_size: 128
+  batch_size: 64
   data_dir: ./data
   model_type: imagenet
   num_clients: 10
@@ -91,7 +91,7 @@ privacy:
   enable_privacy: true
   epsilon: 2.0
   max_grad_norm: 1.0
-  noise_multiplier: 3.0   # ε≈2 を狙う
+  noise_multiplier: 2.5   # ε≈2 を狙う
   # noise_multiplier: 1.4 # ε≈4 を狙う
   # noise_multiplier: 0.7 # ε≈8 を狙う
   # noise_multiplier: 0.35# ε≈16 を狙う
@@ -102,14 +102,14 @@ reproducibility:
 seed: 42
 training:
   epochs: 2
-  lr: 0.0005  # Scaled with larger batch size (256)
-  weight_decay: 0.001
+  lr: 0.00075  # Scaled with larger batch size (256)
+  weight_decay: 0.0005
   scheduler: cosine
   warmup_epochs: 0
   label_smoothing: 0.1
   gradient_clip: 1.0
   optimizer: sgd
   momentum: 0.9
-  microbatch_size: 8
+  microbatch_size: 32
 use_gpu: true
 use_amp: false

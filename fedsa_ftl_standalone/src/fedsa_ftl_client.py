@@ -12,6 +12,22 @@ from typing import Dict, Optional
 from tqdm import tqdm
 from privacy_utils import DifferentialPrivacy
 
+# GradScaler and autocast compatibility for different PyTorch versions
+try:
+    # PyTorch 2.0+
+    from torch.amp import GradScaler, autocast
+    def create_grad_scaler(device='cuda'):
+        return GradScaler(device)
+    def create_autocast(device='cuda', enabled=True):
+        return autocast(device, enabled=enabled)
+except (ImportError, AttributeError):
+    # PyTorch 1.x
+    from torch.cuda.amp import GradScaler, autocast
+    def create_grad_scaler(device='cuda'):
+        return GradScaler()
+    def create_autocast(device='cuda', enabled=True):
+        return autocast(enabled=enabled)
+
 
 class FedSAFTLClient:
     """
@@ -75,7 +91,7 @@ class FedSAFTLClient:
         criterion = nn.CrossEntropyLoss()
         
         # Setup AMP scaler
-        scaler = torch.cuda.amp.GradScaler()
+        scaler = create_grad_scaler('cuda')
         
         # Training metrics
         train_loss = 0
@@ -96,7 +112,7 @@ class FedSAFTLClient:
                     optimizer.zero_grad()
                     
                     # Use autocast for forward pass
-                    with torch.cuda.amp.autocast():
+                    with create_autocast('cuda', enabled=True):
                         # Check if labels are one-hot (from Mixup/CutMix)
                         if labels.dim() == 2 and labels.size(1) > 1:
                             # Mixup/CutMix: labels are soft (one-hot or mixed)
@@ -279,7 +295,7 @@ class FedSAFTLClient:
                 images, labels = images.to(self.device), labels.to(self.device)
                 
                 # Use autocast for forward pass in evaluation
-                with torch.cuda.amp.autocast():
+                with create_autocast('cuda', enabled=True):
                     # Check if labels are one-hot (from Mixup/CutMix) - should not happen in evaluation
                     # but handle it just in case
                     if labels.dim() == 2 and labels.size(1) > 1:
