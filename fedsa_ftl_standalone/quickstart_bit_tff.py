@@ -204,7 +204,8 @@ class BiTFedSAFTLClient(FedSAFTLClient):
             self.optimizer = None
         else:
             trainable_params = [p for p in model.parameters() if p.requires_grad]
-            print(f"Client {client_id}: Single optimizer tracking {len(trainable_params)} trainable parameters")
+            num_trainable = sum(p.numel() for p in trainable_params)
+            print(f"Client {client_id}: Single optimizer tracking {len(trainable_params)} parameter tensors ({num_trainable:,} parameters)")
 
             self.optimizer = torch.optim.SGD(trainable_params, **opt_kwargs)
 
