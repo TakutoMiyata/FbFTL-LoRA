@@ -1,13 +1,8 @@
-# BiT (Big Transfer) with Standard CIFAR-100 Non-IID Configuration
-# Uses Dirichlet distribution (alpha=0.5) for non-IID split
-# Optimized for low-data regime with regularization
-
 seed: 42
 use_gpu: true
 use_amp: false
-
 data:
-  dataset_name: cifar100  # Standard CIFAR-100
+  dataset_name: cifar100
   data_dir: ./data
   num_clients: 10
   num_test_clients: 10
@@ -15,12 +10,9 @@ data:
   num_workers: 4
   pin_memory: true
   input_size: 224
-  verbose: false
-  imagenet_style: true  # Use ImageNet transforms for BiT
-  # Non-IID specific settings
-  data_split: non_iid  # Use non-IID split with Dirichlet distribution
-  alpha: 0.5  # Dirichlet parameter (smaller = more heterogeneous)
-  seed: 42
+  imagenet_style: true
+  data_split: non_iid
+  alpha: 0.1
   augmentations:
     horizontal_flip:
       enabled: true
@@ -48,18 +40,16 @@ data:
       enabled: false
       alpha: 1.0
       prob: 0.5
-
 model:
-  model_name: bit_m_r101x1
+  model_name: bit_s_r101x1
   num_classes: 100
   pretrained: true
   freeze_backbone: true
   lora:
     enabled: true
-    r: 8
+    r: 4
     alpha: 16
     dropout: 0.1
-
 training:
   epochs: 3
   lr: 0.0001
@@ -70,52 +60,45 @@ training:
   label_smoothing: 0.1
   gradient_clip: 1.0
   optimizer: sgd
-
 federated:
-  num_rounds: 200
+  num_rounds: 100
   num_clients: 10
-  client_fraction: 0.3
+  client_fraction: 1.0
   aggregation_method: fedsa
   checkpoint_freq: 25
   exclude_bn_from_agg: true
-
 privacy:
   enable_privacy: false
   epsilon: 8.0
-  delta: 1e-05
+  delta: 1.0e-05
   max_grad_norm: 0.5
   noise_multiplier: 1.0
   target: lora_A
   use_opacus_accounting: true
-
 evaluation:
-  eval_freq: 2
+  eval_freq: 5
   metric: accuracy
   save_best_model: true
-
 experiment:
-  name: BiT_CIFAR100_NonIID_FedSA
-  output_dir: experiments/quickstart_bit_tff/non-iid
+  name: bit_s_r101x1_fedsa_lora_alpha0.1_f1.0_r4
+  output_dir: experiments/bit/fedsa_lora/bit_s_r101x1/alpha0.1/f1.0/r4
   save_history: true
   save_model: true
   log_interval: 10
   use_wandb: false
-  wandb_project: bit-cifar100-fedsa-noniid
+  wandb_project: bit_s_r101x1-fedsa-lora
   wandb_entity: null
-
 reproducibility:
   deterministic: false
-
 advanced:
   personalized: true
   personalization_layers:
-    - lora_B
-    - head
+  - lora_B
+  - head
   use_fbftl: false
   feature_extraction_rounds: 10
   server_lr: 1.0
   server_momentum: 0.9
-
 communication:
   compress: false
   compression_ratio: 0.1
