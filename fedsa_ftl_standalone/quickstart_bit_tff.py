@@ -26,21 +26,26 @@ os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
 # Disable tqdm globally BEFORE importing
 os.environ['TQDM_DISABLE'] = '1'
 
-# Import and configure TensorFlow BEFORE any other imports
-import tensorflow as tf
-# Limit TensorFlow to only 2GB of GPU memory
-gpus = tf.config.list_physical_devices('GPU')
-if gpus:
-    try:
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-            # Set memory limit to 2GB for TensorFlow
-            tf.config.set_logical_device_configuration(
-                gpu,
-                [tf.config.LogicalDeviceConfiguration(memory_limit=2048)])
-        print(f"✅ TensorFlow GPU memory limited to 2GB, growth enabled")
-    except RuntimeError as e:
-        print(f"⚠️  TensorFlow GPU configuration error: {e}")
+# TensorFlow is now optional (not used in this version)
+# Using standard CIFAR-100 instead of TFF
+TF_AVAILABLE = False
+try:
+    import tensorflow as tf
+    # Limit TensorFlow to only 2GB of GPU memory
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+                tf.config.set_logical_device_configuration(
+                    gpu,
+                    [tf.config.LogicalDeviceConfiguration(memory_limit=2048)])
+            print(f"✅ TensorFlow GPU memory limited to 2GB, growth enabled")
+        except RuntimeError as e:
+            print(f"⚠️  TensorFlow GPU configuration error: {e}")
+    TF_AVAILABLE = True
+except ImportError:
+    print("ℹ️  TensorFlow not available - using standard CIFAR-100 only")
 
 from tqdm import tqdm
 
