@@ -27,21 +27,26 @@ os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
 # Disable tqdm globally BEFORE importing
 os.environ['TQDM_DISABLE'] = '1'
 
-# Import and configure TensorFlow BEFORE any other imports
-import tensorflow as tf
-# Limit TensorFlow to only 2GB of GPU memory
-gpus = tf.config.list_physical_devices('GPU')
-if gpus:
-    try:
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-            # Set memory limit to 2GB for TensorFlow
-            tf.config.set_logical_device_configuration(
-                gpu,
-                [tf.config.LogicalDeviceConfiguration(memory_limit=2048)])
-        print(f"✅ TensorFlow GPU memory limited to 2GB, growth enabled")
-    except RuntimeError as e:
-        print(f"⚠️  TensorFlow GPU configuration error: {e}")
+# TensorFlow is now optional (not used in this version)
+# Using standard CIFAR-100 instead of TFF
+TF_AVAILABLE = False
+try:
+    import tensorflow as tf
+    # Limit TensorFlow to only 2GB of GPU memory
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+                tf.config.set_logical_device_configuration(
+                    gpu,
+                    [tf.config.LogicalDeviceConfiguration(memory_limit=2048)])
+            print(f"✅ TensorFlow GPU memory limited to 2GB, growth enabled")
+        except RuntimeError as e:
+            print(f"⚠️  TensorFlow GPU configuration error: {e}")
+    TF_AVAILABLE = True
+except ImportError:
+    print("ℹ️  TensorFlow not available - using standard CIFAR-100 only")
 
 from tqdm import tqdm
 
@@ -148,7 +153,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from backbones_bit import make_bit_model_with_lora, print_bit_model_summary
 from fedsa_ftl_client import FedSAFTLClient
 from fedsa_ftl_server import FedSAFTLServer
-from tff_data_utils import prepare_tff_federated_data, get_tff_dataloader
+# TFF imports removed - using standard CIFAR-100
 from privacy_utils import DifferentialPrivacy
 from notification_utils import SlackNotifier
 from dp_utils import WeightedFedAvg
@@ -555,13 +560,33 @@ def main():
             raise RuntimeError("Privacy is enabled but Opacus is not installed.")
         print("✅ Opacus is available for Differential Privacy")
 
-    print("\nPreparing TFF CIFAR-100 federated data...")
-    train_datasets, test_datasets, client_info = prepare_tff_federated_data(config['data'])
+    # Use standard CIFAR-100 with data_utils (both IID and non-IID)
+    print("\nPreparing standard CIFAR-100 federated data...")
+    from data_utils import prepare_federated_data, get_client_dataloader
 
-    print(f"\n✅ TFF data loaded:")
-    print(f"  Training clients: {client_info['num_train_clients']}")
-    print(f"  Test clients: {client_info['num_test_clients']}")
-    print(f"  Split method: {client_info['split_method']}")
+    trainset, testset, client_train_indices, client_test_indices = prepare_federated_data(config['data'])
+
+    data_split = config['data'].get('data_split', 'iid')
+    print(f"\n✅ Standard CIFAR-100 data loaded:")
+    print(f"  Training clients: {len(client_train_indices)}")
+    print(f"  Test clients: {len(client_test_indices)}")
+    print(f"  Split method: {data_split.upper()}")
+    print(f"  Using standard torchvision CIFAR-100")
+
+    # Convert to uniform format for compatibility
+    train_datasets = {}
+    test_datasets = {}
+    for i, indices in enumerate(client_train_indices):
+        train_datasets[i] = (trainset, indices)
+    for i, indices in enumerate(client_test_indices):
+        test_datasets[i] = (testset, indices)
+
+    client_info = {
+        'num_train_clients': len(client_train_indices),
+        'num_test_clients': len(client_test_indices),
+        'split_method': f'{data_split.upper()} (standard CIFAR-100)',
+        'use_standard_cifar': True
+    }
 
     print(f"\nCreating BiT model...")
     initial_model = make_bit_model_with_lora(config)
@@ -635,8 +660,9 @@ def main():
 
     privacy_enabled = config.get('privacy', {}).get('enable_privacy', False)
 
-    train_client_ids = client_info['train_client_ids']
-    test_client_ids = client_info['test_client_ids']
+    # Use simple integer indices for all clients
+    train_client_ids = list(range(client_info['num_train_clients']))
+    test_client_ids = list(range(client_info['num_test_clients']))
 
     for i, client_id in enumerate(train_client_ids):
         privacy_mechanism = None
@@ -704,10 +730,11 @@ def main():
         for client_idx in client_pbar:
             client_pbar.set_description(f"Training client {client_idx}")
 
-            tff_client_id = train_client_ids[client_idx]
-            client_dataset = train_datasets[tff_client_id]
-            client_dataloader = get_tff_dataloader(
-                client_dataset,
+            # Use standard CIFAR-100 dataloader
+            trainset, indices = train_datasets[client_idx]
+            client_dataloader = get_client_dataloader(
+                trainset,
+                indices,
                 batch_size=config['data']['batch_size'],
                 shuffle=True,
                 num_workers=config['data'].get('num_workers', 0)
@@ -739,31 +766,23 @@ def main():
             personalized_results = []
             personalized_accuracies = []
 
-            # Create a single combined test dataloader from all test clients
-            # This simulates evaluating on a "global test set"
-            all_test_samples = []
-            for test_id in test_client_ids:
-                test_dataset = test_datasets[test_id]
-                all_test_samples.extend([(test_dataset[i][0], test_dataset[i][1]) for i in range(len(test_dataset))])
+            # Create combined test dataloader from all test clients
+            # Combine all test client indices
+            all_test_indices = []
+            for test_idx in range(len(test_datasets)):
+                test_set_ref, indices = test_datasets[test_idx]
+                all_test_indices.extend(indices)
 
-            # Create a simple dataset wrapper
-            class CombinedTestDataset(torch.utils.data.Dataset):
-                def __init__(self, samples):
-                    self.samples = samples
-                def __len__(self):
-                    return len(self.samples)
-                def __getitem__(self, idx):
-                    return self.samples[idx]
-
-            combined_test_dataset = CombinedTestDataset(all_test_samples)
-            combined_test_loader = get_tff_dataloader(
-                combined_test_dataset,
+            # Use the testset reference from first client
+            test_set_ref, _ = test_datasets[0]
+            combined_test_loader = get_client_dataloader(
+                test_set_ref,
+                all_test_indices,
                 batch_size=config['data']['batch_size'],
                 shuffle=False,
                 num_workers=config['data'].get('num_workers', 0)
             )
-
-            print(f"  Combined test set: {len(all_test_samples)} samples from {len(test_client_ids)} test clients")
+            print(f"  Combined test set: {len(all_test_indices)} samples from {len(test_datasets)} test clients")
 
             for client_idx in selected_clients:
                 # Evaluate this training client's personalized model on combined test set
