@@ -88,13 +88,13 @@ privacy:
   use_opacus_accounting: true
 
 evaluation:
-  eval_freq: 5
+  eval_freq: 2
   metric: accuracy
   save_best_model: true
 
 experiment:
   name: BiT_TFF_CIFAR100_IID_FedSA_LowLR
-  output_dir: experiments/quickstart_bit_tff
+  output_dir: experiments/quickstart_bit_tff/iid
   save_history: true
   save_model: true
   log_interval: 10

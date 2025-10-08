@@ -95,7 +95,7 @@ evaluation:
 
 experiment:
   name: BiT_CIFAR100_NonIID_FedSA
-  output_dir: experiments/quickstart_bit_tff
+  output_dir: experiments/quickstart_bit_tff/non-iid
   save_history: true
   save_model: true
   log_interval: 10

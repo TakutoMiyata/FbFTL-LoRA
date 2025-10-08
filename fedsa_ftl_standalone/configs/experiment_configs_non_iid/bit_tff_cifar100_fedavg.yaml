@@ -7,7 +7,7 @@ use_gpu: true
 use_amp: false
 
 data:
-  dataset_name: tff_cifar100
+  dataset_name: cifar100
   data_dir: ./data
   num_clients: 10
   num_test_clients: 30
