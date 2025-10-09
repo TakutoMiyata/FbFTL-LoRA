@@ -344,7 +344,7 @@ class BiTFedSAFTLClient(FedSAFTLClient):
                     # DP backward with per-sample gradient clipping for A, regular gradients for B
                     self.dp_optimizer.dp_backward_on_loss_efficient(
                         loss_vec,
-                        microbatch_size=8,
+                        microbatch_size=32,
                         also_compute_B_grads=True
                     )
 

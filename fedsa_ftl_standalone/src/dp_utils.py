@@ -101,7 +101,7 @@ class DPOptimizer:
                 p.grad.zero_()
     
     def dp_backward_on_loss_efficient(self, loss_vec: torch.Tensor, 
-                                     microbatch_size: int = 8,
+                                     microbatch_size: int = 32,
                                      also_compute_B_grads: bool = True):
         """
         Efficient per-sample gradient clipping for A parameters with optional B gradients
