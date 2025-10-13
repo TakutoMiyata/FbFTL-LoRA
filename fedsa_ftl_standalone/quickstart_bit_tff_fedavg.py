@@ -259,11 +259,8 @@ class BiTFedAvgClient(FedSAFTLClient):
 
         for epoch in range(num_epochs):
             epoch_loss = 0.0
-            pbar = tqdm(dataloader,
-                        desc=f"Client {self.client_id} - Epoch {epoch+1}/{num_epochs}",
-                        leave=False, unit="batch")
 
-            for batch_idx, (data, target) in enumerate(pbar):
+            for batch_idx, (data, target) in enumerate(dataloader):
                 data, target = data.to(self.device), target.to(self.device)
                 if model_is_half:
                     data = data.half()
@@ -325,14 +322,7 @@ class BiTFedAvgClient(FedSAFTLClient):
                 correct += pred.eq(target_for_acc.view_as(pred)).sum().item()
                 total += target_for_acc.size(0)
 
-                pbar.set_postfix({
-                    'loss': f'{loss.item():.4f}',
-                    'avg_loss': f'{epoch_loss/(batch_idx+1):.4f}',
-                    'acc': f'{100.*correct/total:.2f}%'
-                })
-
             total_loss += epoch_loss
-            print(f"Client {self.client_id} - Epoch {epoch+1} completed")
 
             if torch.cuda.is_available():
                 if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp':
@@ -898,15 +888,15 @@ def main():
                 print(f"  ** New best test accuracy! **")
 
         print(f"  Communication Cost (per-round): {round_stats.get('communication_cost_mb', 0):.2f} MB")
-        print(f"  Round time: {round_time:.2f}s")
-        print(f"  Total time: {total_time:.2f}s")
+        print(f"  Round time: {round_time/60:.1f} min ({round_time:.0f}s)")
+        print(f"  Total time: {total_time/60:.1f} min ({total_time/3600:.2f}h)")
 
         rounds_completed = round_idx + 1
         if rounds_completed > 0:
             avg_round_time = total_time / rounds_completed
             remaining_rounds = config['federated']['num_rounds'] - rounds_completed
             estimated_remaining = avg_round_time * remaining_rounds
-            print(f"  Estimated remaining time: {estimated_remaining:.0f}s ({estimated_remaining/60:.1f} min)")
+            print(f"  Estimated remaining time: {estimated_remaining/3600:.1f}h ({estimated_remaining/60:.0f} min)")
 
         round_pbar.set_postfix({
             'train_acc': f'{avg_train_acc:.2f}%',
