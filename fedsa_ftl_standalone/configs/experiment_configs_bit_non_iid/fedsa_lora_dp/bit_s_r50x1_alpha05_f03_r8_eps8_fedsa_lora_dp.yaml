@@ -64,7 +64,7 @@ privacy:
   epsilon: 8.0
   delta: 1.0e-05
   max_grad_norm: 0.5
-  noise_multiplier: 1.0
+  noise_multiplier: 1.1
   target: lora_A
   use_opacus_accounting: true
 evaluation:

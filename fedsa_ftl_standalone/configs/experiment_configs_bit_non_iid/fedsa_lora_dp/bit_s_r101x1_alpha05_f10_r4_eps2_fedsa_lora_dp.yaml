@@ -61,10 +61,10 @@ federated:
   exclude_bn_from_agg: true
 privacy:
   enable_privacy: true
-  epsilon: 4.0
+  epsilon: 2.0
   delta: 1.0e-05
   max_grad_norm: 0.5
-  noise_multiplier: 1.0
+  noise_multiplier: 10.0
   target: lora_A
   use_opacus_accounting: true
 evaluation:

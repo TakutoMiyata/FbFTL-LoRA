@@ -12,8 +12,7 @@ data:
   input_size: 224
   verbose: false
   imagenet_style: true
-  data_split: non_iid
-  alpha: 0.1
+  data_split: iid
   seed: 42
   augmentations:
     horizontal_flip:
@@ -61,10 +60,10 @@ federated:
   exclude_bn_from_agg: true
 privacy:
   enable_privacy: true
-  epsilon: 4.0
+  epsilon: 2.0
   delta: 1.0e-05
   max_grad_norm: 0.5
-  noise_multiplier: 1.0
+  noise_multiplier: 10.0
   target: lora_A
   use_opacus_accounting: true
 evaluation:
@@ -72,13 +71,13 @@ evaluation:
   metric: accuracy
   save_best_model: true
 experiment:
-  name: BiT_NonIID_bit_s_r50x1_alpha0.1_f1.0_r4_eps4_FedSA_LoRA_DP
-  output_dir: experiments/bit_non_iid/fedsa_lora_dp/bit_s_r50x1_alpha0.1_f1.0_r4_eps4
+  name: BiT_IID_bit_s_r50x1_f1.0_r8_eps4_FedSA_LoRA_DP
+  output_dir: experiments/bit_iid/fedsa_lora_dp/bit_s_r50x1_f1.0_r8_eps4
   save_history: true
   save_model: true
   log_interval: 10
   use_wandb: false
-  wandb_project: bit-non-iid
+  wandb_project: bit-iid
   wandb_entity: null
 reproducibility:
   deterministic: false
@@ -102,6 +101,6 @@ model:
   freeze_backbone: true
   lora:
     enabled: true
-    r: 4
-    alpha: 8
+    r: 8
+    alpha: 16
     dropout: 0.2
