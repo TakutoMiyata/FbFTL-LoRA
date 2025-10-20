@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Quick start script for BiT (Big Transfer) federated transfer learning on TFF CIFAR-100
-Uses TensorFlow Federated's hierarchical LDA non-IID dataset
+Quick start script for BiT (Big Transfer) federated transfer learning on MNIST/SVHN
+Uses torchvision datasets with configurable IID or non-IID partitions
 """
 
 import torch
@@ -16,6 +16,10 @@ import json
 import time
 from datetime import datetime
 
+import torchvision
+import torchvision.transforms as transforms
+from torch.utils.data import ConcatDataset
+
 # Set GPU device BEFORE any CUDA operations
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
@@ -26,8 +30,7 @@ os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
 # Disable tqdm globally BEFORE importing
 os.environ['TQDM_DISABLE'] = '1'
 
-# TensorFlow is now optional (not used in this version)
-# Using standard CIFAR-100 instead of TFF
+# TensorFlow is optional (used only for GPU memory control if available)
 TF_AVAILABLE = False
 try:
     import tensorflow as tf
@@ -45,7 +48,7 @@ try:
             print(f"⚠️  TensorFlow GPU configuration error: {e}")
     TF_AVAILABLE = True
 except ImportError:
-    print("ℹ️  TensorFlow not available - using standard CIFAR-100 only")
+    print("ℹ️  TensorFlow not available - continuing without TF-specific GPU controls")
 
 from tqdm import tqdm
 
@@ -126,6 +129,150 @@ def comprehensive_grad_sample_cleanup(model, verbose=False):
     if verbose and (cleared_params > 0 or cleared_buffers > 0):
         print(f"🧹 Comprehensive cleanup: {cleared_params} params, {cleared_buffers} buffers")
 
+def build_dataset_transforms(dataset_name, data_config, train=True):
+    """Construct transforms for MNIST/SVHN that align with BiT input expectations."""
+    augmentation_config = data_config.get('augmentations', {}) or {}
+    input_size = data_config.get('input_size', 224)
+
+    transforms_list = []
+
+    if dataset_name == 'mnist':
+        transforms_list.append(transforms.Grayscale(num_output_channels=3))
+    else:
+        transforms_list.append(transforms.Lambda(lambda img: img.convert("RGB")))
+
+    if train and augmentation_config.get('random_resized_crop', {}).get('enabled', False):
+        scale_min = augmentation_config['random_resized_crop'].get('scale_min', 0.4)
+        transforms_list.append(
+            transforms.RandomResizedCrop(
+                input_size,
+                scale=(scale_min, 1.0)
+            )
+        )
+    else:
+        transforms_list.append(transforms.Resize((input_size, input_size)))
+
+    if train:
+        if augmentation_config.get('horizontal_flip', {}).get('enabled', False):
+            prob = augmentation_config['horizontal_flip'].get('prob', 0.5)
+            transforms_list.append(transforms.RandomHorizontalFlip(p=prob))
+
+        if augmentation_config.get('random_rotation', {}).get('enabled', False):
+            degrees = augmentation_config['random_rotation'].get('degrees', 10)
+            transforms_list.append(transforms.RandomRotation(degrees))
+
+        if augmentation_config.get('color_jitter', {}).get('enabled', False):
+            jitter_cfg = augmentation_config['color_jitter']
+            transforms_list.append(
+                transforms.ColorJitter(
+                    brightness=jitter_cfg.get('brightness', 0.2),
+                    contrast=jitter_cfg.get('contrast', 0.2),
+                    saturation=jitter_cfg.get('saturation', 0.2),
+                    hue=jitter_cfg.get('hue', 0.1)
+                )
+            )
+
+    transforms_list.append(transforms.ToTensor())
+    transforms_list.append(transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD))
+
+    return transforms.Compose(transforms_list)
+
+
+def load_mnist_svhn_data(data_config):
+    """Load torchvision MNIST or SVHN datasets with BiT-compatible transforms."""
+    dataset_name = data_config.get('dataset_name', 'mnist').lower()
+    data_dir = data_config.get('data_dir', './data')
+
+    train_transform = build_dataset_transforms(dataset_name, data_config, train=True)
+    test_transform = build_dataset_transforms(dataset_name, data_config, train=False)
+
+    if dataset_name == 'mnist':
+        trainset = torchvision.datasets.MNIST(
+            root=data_dir,
+            train=True,
+            download=True,
+            transform=train_transform
+        )
+        testset = torchvision.datasets.MNIST(
+            root=data_dir,
+            train=False,
+            download=True,
+            transform=test_transform
+        )
+        num_classes = 10
+    elif dataset_name == 'svhn':
+        trainset = torchvision.datasets.SVHN(
+            root=data_dir,
+            split='train',
+            download=True,
+            transform=train_transform
+        )
+
+        if data_config.get('use_svhn_extra', False):
+            extra = torchvision.datasets.SVHN(
+                root=data_dir,
+                split='extra',
+                download=True,
+                transform=train_transform
+            )
+            trainset = ConcatDataset([trainset, extra])
+
+        testset = torchvision.datasets.SVHN(
+            root=data_dir,
+            split='test',
+            download=True,
+            transform=test_transform
+        )
+        num_classes = 10
+    else:
+        raise ValueError(f"Unsupported dataset: {dataset_name}. Use 'mnist' or 'svhn'.")
+
+    return trainset, testset, dataset_name, num_classes
+
+
+def prepare_mnist_svhn_federated_data(data_config):
+    """Prepare federated splits for MNIST or SVHN datasets."""
+    seed = data_config.get('seed', 42)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    trainset, testset, dataset_name, num_classes = load_mnist_svhn_data(data_config)
+
+    num_clients = data_config.get('num_clients', 10)
+    num_test_clients = data_config.get('num_test_clients', num_clients)
+    data_split = data_config.get('data_split', 'non_iid')
+    force_iid_debug = data_config.get('force_iid_for_debug', False)
+    alpha = data_config.get('alpha', 0.5)
+
+    if data_split == 'non_iid' and not force_iid_debug:
+        client_train_indices = create_non_iid_splits(trainset, num_clients, alpha)
+
+        np.random.seed(seed + 1000)
+        client_test_indices = create_non_iid_splits(testset, num_test_clients, alpha)
+        np.random.seed(seed)
+    else:
+        if force_iid_debug and data_split == 'non_iid':
+            print("🔧 DEBUG MODE: Forcing IID splits for non-IID configuration")
+        client_train_indices = create_iid_splits(trainset, num_clients)
+        client_test_indices = create_iid_splits(testset, num_test_clients)
+
+    if data_config.get('verbose', False):
+        print("\n=== Training Data Distribution ===")
+        analyze_data_distribution(trainset, client_train_indices, num_classes)
+        print("\n=== Test Data Distribution ===")
+        analyze_data_distribution(testset, client_test_indices, num_classes)
+
+    return {
+        'trainset': trainset,
+        'testset': testset,
+        'client_train_indices': client_train_indices,
+        'client_test_indices': client_test_indices,
+        'dataset_name': dataset_name,
+        'num_classes': num_classes,
+        'num_train_clients': len(client_train_indices),
+        'num_test_clients': len(client_test_indices)
+    }
+
 
 # Load environment variables from .env file
 def load_env_file(env_path='.env'):
@@ -152,11 +299,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from backbones_bit import make_bit_model_with_lora, print_bit_model_summary
 from fedsa_ftl_client import FedSAFTLClient
 from fedsa_ftl_server import FedSAFTLServer
-from tff_data_utils import prepare_tff_federated_data, get_tff_dataloader
+from data_utils import (
+    get_client_dataloader,
+    create_iid_splits,
+    create_non_iid_splits,
+    analyze_data_distribution,
+)
 from privacy_utils import DifferentialPrivacy
 from notification_utils import SlackNotifier
 from dp_utils import WeightedFedAvg
 import torch.nn.functional as F
+
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
 class BiTFedSAFTLClient(FedSAFTLClient):
@@ -406,8 +561,8 @@ def main():
     else:
         print("Slack notifications disabled")
 
-    parser = argparse.ArgumentParser(description='FedSA-LoRA BiT with TFF CIFAR-100 (A matrices only)')
-    parser.add_argument('--config', type=str, default='configs/experiment_configs_non_iid/bit_tff_cifar100.yaml',
+    parser = argparse.ArgumentParser(description='FedSA-LoRA BiT with MNIST/SVHN (A matrices only)')
+    parser.add_argument('--config', type=str, default='configs/bit_mnist_svhn.yaml',
                        help='Path to configuration file')
     parser.add_argument('--rounds', type=int, default=None,
                        help='Override number of rounds')
@@ -422,29 +577,32 @@ def main():
     config_path = Path(args.config)
     if not config_path.exists():
         print(f"Configuration file not found: {config_path}")
-        print("Creating default configuration for BiT on TFF CIFAR-100...")
+        print("Creating default configuration for BiT on MNIST (non-IID)...")
 
         default_config = {
             'seed': 42,
             'use_gpu': True,
             'data': {
-                'dataset_name': 'tff_cifar100',
+                'dataset_name': 'mnist',
                 'data_dir': './data',
                 'num_clients': 10,
-                'num_test_clients': 30,
+                'num_test_clients': 10,
                 'batch_size': 64,
                 'num_workers': 4,
                 'input_size': 224,
                 'verbose': False,
+                'data_split': 'non_iid',
+                'alpha': 0.5,
                 'augmentations': {
                     'horizontal_flip': {'enabled': True, 'prob': 0.5},
                     'random_rotation': {'enabled': True, 'degrees': 10},
                     'random_resized_crop': {'enabled': True, 'scale_min': 0.5},
+                    'color_jitter': {'enabled': False}
                 }
             },
             'model': {
                 'model_name': 'bit_m_r50x1',
-                'num_classes': 100,
+                'num_classes': 10,
                 'pretrained': True,
                 'freeze_backbone': True,
                 'lora': {
@@ -478,17 +636,17 @@ def main():
                 'eval_freq': 25
             },
             'experiment': {
-                'name': 'BiT_TFF_CIFAR100_NonIID',
-                'output_dir': 'experiments/quickstart_bit_tff'
+                'name': 'BiT_MNIST_NonIID',
+                'output_dir': 'experiments/quickstart_bit_mnist_svhn'
             },
             'reproducibility': {
                 'deterministic': False
             }
         }
 
-        configs_dir = Path("configs/experiment_configs_non_iid")
+        configs_dir = Path("configs")
         configs_dir.mkdir(parents=True, exist_ok=True)
-        config_path = configs_dir / "bit_tff_cifar100.yaml"
+        config_path = configs_dir / "bit_mnist_svhn.yaml"
         with open(config_path, 'w') as f:
             yaml.dump(default_config, f, default_flow_style=False, sort_keys=False)
         print(f"Default configuration saved to: {config_path}")
@@ -507,15 +665,17 @@ def main():
 
     device = torch.device('cuda' if config.get('use_gpu', False) and torch.cuda.is_available() else 'cpu')
 
+    dataset_label = config['data'].get('dataset_name', 'mnist').upper()
+
     print("=" * 80)
-    print("FedSA-LoRA BiT Federated Learning with TFF CIFAR-100 (A matrices only)")
+    print("FedSA-LoRA BiT Federated Learning on MNIST/SVHN (A matrices only)")
     print("=" * 80)
     print(f"Configuration: {config_path}")
     print(f"Device: {device}")
     print(f"Model: {config['model']['model_name']}")
-    print(f"Dataset: TFF CIFAR-100 (hierarchical LDA non-IID)")
+    print(f"Dataset: {dataset_label} (torchvision)")
     print(f"Training Clients: {config['federated']['num_clients']}")
-    print(f"Test Clients: {config['data'].get('num_test_clients', 30)}")
+    print(f"Test Clients: {config['data'].get('num_test_clients', config['federated']['num_clients'])}")
     print(f"Rounds: {config['federated']['num_rounds']}")
     privacy_enabled = config.get('privacy', {}).get('enable_privacy', False)
     print(f"Privacy: {'Enabled' if privacy_enabled else 'Disabled'}")
@@ -543,32 +703,35 @@ def main():
             raise RuntimeError("Privacy is enabled but Opacus is not installed.")
         print("✅ Opacus is available for Differential Privacy")
 
-    # Use standard CIFAR-100 with data_utils (both IID and non-IID)
-    print("\nPreparing standard CIFAR-100 federated data...")
-    from data_utils import prepare_federated_data, get_client_dataloader
+    print("\nPreparing federated data for MNIST/SVHN...")
+    dataset_info = prepare_mnist_svhn_federated_data(config['data'])
 
-    trainset, testset, client_train_indices, client_test_indices = prepare_federated_data(config['data'])
+    trainset = dataset_info['trainset']
+    testset = dataset_info['testset']
+    client_train_indices = dataset_info['client_train_indices']
+    client_test_indices = dataset_info['client_test_indices']
+    dataset_name = dataset_info['dataset_name']
+    num_classes = dataset_info['num_classes']
 
     data_split = config['data'].get('data_split', 'iid')
-    print(f"\n✅ Standard CIFAR-100 data loaded:")
+    print(f"\n✅ {dataset_name.upper()} data prepared:")
     print(f"  Training clients: {len(client_train_indices)}")
     print(f"  Test clients: {len(client_test_indices)}")
     print(f"  Split method: {data_split.upper()}")
-    print(f"  Using standard torchvision CIFAR-100")
+    print(f"  Input size: {config['data'].get('input_size', 224)}")
 
-    # Convert to uniform format for compatibility
-    train_datasets = {}
-    test_datasets = {}
-    for i, indices in enumerate(client_train_indices):
-        train_datasets[i] = (trainset, indices)
-    for i, indices in enumerate(client_test_indices):
-        test_datasets[i] = (testset, indices)
+    if config['model'].get('num_classes') != num_classes:
+        print(f"  Adjusting model num_classes to {num_classes} for {dataset_name.upper()}")
+        config['model']['num_classes'] = num_classes
+
+    train_datasets = {i: (trainset, indices) for i, indices in enumerate(client_train_indices)}
+    test_datasets = {i: (testset, indices) for i, indices in enumerate(client_test_indices)}
 
     client_info = {
         'num_train_clients': len(client_train_indices),
         'num_test_clients': len(client_test_indices),
-        'split_method': f'{data_split.upper()} (standard CIFAR-100)',
-        'use_standard_cifar': True
+        'split_method': f'{data_split.upper()} ({dataset_name.upper()})',
+        'dataset_name': dataset_name.upper()
     }
 
     print(f"\nCreating BiT model...")
@@ -610,7 +773,7 @@ def main():
     clients = []
 
     current_date = datetime.now().strftime('%m%d')
-    base_experiment_dir = Path(config.get('experiment', {}).get('output_dir', 'experiments/quickstart_bit_tff'))
+    base_experiment_dir = Path(config.get('experiment', {}).get('output_dir', 'experiments/quickstart_bit_mnist_svhn'))
     agg_method = config.get('federated', {}).get('aggregation_method', 'unknown')
     method_subdir = agg_method.lower()
     method_dir = base_experiment_dir / method_subdir
@@ -632,7 +795,7 @@ def main():
 
     if slack_notifier:
         config_for_notification = {
-            'experiment': {'name': f'BiT TFF QuickStart ({config["model"]["model_name"]})'},
+            'experiment': {'name': f'BiT MNIST/SVHN QuickStart ({config["model"]["model_name"]})'},
             'federated': config['federated'],
             'privacy': config.get('privacy', {})
         }
@@ -673,7 +836,7 @@ def main():
         clients.append(client)
 
     print(f"✅ All {len(clients)} clients initialized")
-    print("Starting BiT federated training with TFF CIFAR-100...")
+    print(f"Starting BiT federated training with {dataset_name.upper()}...")
     print("=" * 80)
 
     best_accuracy = 0
@@ -704,7 +867,7 @@ def main():
 
         for client_idx in selected_clients:
 
-            # Use standard CIFAR-100 dataloader
+            # Build client dataloader for current dataset
             trainset, indices = train_datasets[client_idx]
             client_dataloader = get_client_dataloader(
                 trainset,
@@ -902,7 +1065,7 @@ def main():
 
         if slack_notifier and (round_idx + 1) % 25 == 0:
             config_for_notification = {
-                'experiment': {'name': f'BiT TFF QuickStart ({config["model"]["model_name"]})'},
+                'experiment': {'name': f'BiT MNIST/SVHN QuickStart ({config["model"]["model_name"]})'},
                 'federated': config['federated']
             }
 
@@ -959,7 +1122,7 @@ def main():
         'final_avg_accuracy': avg_personalized_acc if 'avg_personalized_acc' in locals() and avg_personalized_acc is not None else None,
         'training_duration_hours': training_duration / 3600,
         'model_name': config['model']['model_name'],
-        'dataset': 'TFF_CIFAR100'
+        'dataset': dataset_name.upper()
     }
 
     final_results_file = experiment_dir / f'final_results_{date_bit_suffix}.json'
@@ -1007,6 +1170,7 @@ def main():
     print("=" * 80)
     print(f"Configuration: {config_path.name}")
     print(f"Model: {config['model']['model_name']}")
+    print(f"Dataset: {dataset_name.upper()}")
     print(f"Best Personalized Accuracy: {best_accuracy:.2f}% (Round {best_round})")
     print(f"Total Rounds: {config['federated']['num_rounds']}")
     total_comm_mb = sum(r['communication_cost_mb'] for r in results['rounds'])
@@ -1024,7 +1188,7 @@ def main():
     if slack_notifier:
         config_for_notification = {
             'experiment': {
-                'name': f'BiT TFF QuickStart ({config["model"]["model_name"]})',
+                'name': f'BiT MNIST/SVHN QuickStart ({config["model"]["model_name"]})',
                 'output_dir': str(experiment_dir)
             },
             'federated': config['federated'],
@@ -1072,7 +1236,7 @@ if __name__ == "__main__":
             try:
                 slack_notifier = SlackNotifier(webhook_url)
                 config_for_notification = {
-                    'experiment': {'name': 'BiT TFF QuickStart (ERROR)'}
+                    'experiment': {'name': 'BiT MNIST/SVHN QuickStart (ERROR)'}
                 }
                 slack_notifier.send_error_notification(
                     config_for_notification,

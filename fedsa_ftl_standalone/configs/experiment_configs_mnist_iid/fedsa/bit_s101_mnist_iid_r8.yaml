@@ -1,13 +1,8 @@
-# BiT CIFAR-100 Non-IID Configuration (Debug: Actually IID-like)
-# Uses extremely large alpha to make non-IID distribution approach IID
-# Useful for debugging non-IID code path with IID-like data
-
 seed: 42
 use_gpu: true
 use_amp: false
-
 data:
-  dataset_name: cifar100
+  dataset_name: mnist
   data_dir: ./data
   num_clients: 10
   num_test_clients: 10
@@ -15,11 +10,10 @@ data:
   num_workers: 4
   pin_memory: true
   input_size: 224
-  verbose: true  # Enable to see distribution
+  verbose: false
   imagenet_style: true
-  # DEBUG: Non-IID code path, but IID-like distribution
-  data_split: non_iid
-  alpha: 1000.0  # Very large alpha → almost IID distribution
+  data_split: iid
+  alpha: 0.1
   seed: 42
   augmentations:
     horizontal_flip:
@@ -48,20 +42,8 @@ data:
       enabled: false
       alpha: 1.0
       prob: 0.5
-
-model:
-  model_name: bit_m_r50x1
-  num_classes: 100
-  pretrained: true
-  freeze_backbone: true
-  lora:
-    enabled: true
-    r: 8
-    alpha: 16
-    dropout: 0.1
-
 training:
-  epochs: 1  # Reduced for quick debugging
+  epochs: 3
   lr: 0.0001
   momentum: 0.9
   weight_decay: 0.001
@@ -70,53 +52,56 @@ training:
   label_smoothing: 0.1
   gradient_clip: 1.0
   optimizer: sgd
-
 federated:
-  num_rounds: 10  # Reduced for quick debugging
+  num_rounds: 100
   num_clients: 10
-  client_fraction: 1.0
+  client_fraction: 0.3
   aggregation_method: fedsa
-  checkpoint_freq: 5
+  checkpoint_freq: 25
   exclude_bn_from_agg: true
-
 privacy:
   enable_privacy: false
-  epsilon: 8.0
-  delta: 1e-05
+  epsilon: 2.0
+  delta: 1.0e-05
   max_grad_norm: 0.5
-  noise_multiplier: 1.0
+  noise_multiplier: 3.8
   target: lora_A
   use_opacus_accounting: true
-
 evaluation:
-  eval_freq: 2  # Evaluate more frequently for debugging
+  eval_freq: 5
   metric: accuracy
   save_best_model: true
-
 experiment:
-  name: BiT_CIFAR100_NonIID_Debug_IID_Like
-  output_dir: experiments/debug_bit
+  name: BiT_s101_MNIST_IID_r8
+  output_dir: experiments/bit_mnist_s101/iid_r8
   save_history: true
-  save_model: false  # Don't save models during debug
+  save_model: true
   log_interval: 10
   use_wandb: false
-  wandb_project: bit-cifar100-debug
+  wandb_project: bit-mnist
   wandb_entity: null
-
 reproducibility:
   deterministic: false
-
 advanced:
   personalized: true
   personalization_layers:
-    - lora_B
-    - head
+  - lora_B
+  - head
   use_fbftl: false
   feature_extraction_rounds: 10
   server_lr: 1.0
   server_momentum: 0.9
-
 communication:
   compress: false
   compression_ratio: 0.1
   quantization_bits: null
+model:
+  model_name: bit_s_r101x1
+  num_classes: 100
+  pretrained: true
+  freeze_backbone: true
+  lora:
+    enabled: true
+    r: 8
+    alpha: 16
+    dropout: 0.2
