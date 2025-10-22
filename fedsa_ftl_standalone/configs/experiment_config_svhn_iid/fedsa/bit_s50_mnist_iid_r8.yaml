@@ -60,7 +60,7 @@ federated:
   checkpoint_freq: 25
   exclude_bn_from_agg: true
 privacy:
-  enable_privacy: true
+  enable_privacy: false
   epsilon: 2.0
   delta: 1.0e-05
   max_grad_norm: 0.5
