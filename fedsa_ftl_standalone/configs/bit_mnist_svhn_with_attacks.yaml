@@ -1,0 +1,67 @@
+seed: 123
+use_gpu: true
+
+data:
+  dataset_name: mnist
+  data_dir: ./data
+  num_clients: 5
+  num_test_clients: 5
+  batch_size: 32
+  num_workers: 2
+  input_size: 224
+  verbose: false
+  data_split: non_iid
+  alpha: 0.3
+
+model:
+  model_name: bit_s_r50x1
+  num_classes: 10
+  pretrained: true
+  freeze_backbone: true
+  lora:
+    enabled: true
+    r: 8
+    alpha: 16
+    dropout: 0.1
+
+training:
+  epochs: 3
+  lr: 0.0001
+  momentum: 0.9
+  weight_decay: 0.001
+
+federated:
+  num_rounds: 100
+  num_clients: 10
+  client_fraction: 1.0
+  aggregation_method: fedsa_shareA_dp
+  checkpoint_freq: 25
+
+privacy:
+  enable_privacy: true
+  epsilon: 6.0
+  delta: 1.0e-5
+  max_grad_norm: 0.5
+  noise_multiplier: 1.2
+
+evaluation:
+  eval_freq: 2
+
+experiment:
+  name: BiT_MNIST_AttackEval
+  output_dir: experiments/bit_mnist_attack_eval
+
+privacy_attacks:
+  membership_inference:
+    enabled: true
+    attack_batch_size: 64
+    max_member_batches: 5
+    max_nonmember_batches: 5
+  gradient_leakage:
+    enabled: true
+    optimization_steps: 150
+    attack_lr: 0.2
+    max_layers: 2
+    optimize_labels: true
+    l2_regularizer: 1.0e-4
+    max_seconds: 5.0
