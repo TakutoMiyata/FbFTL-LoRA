@@ -308,6 +308,10 @@ from data_utils import (
 from privacy_utils import DifferentialPrivacy
 from notification_utils import SlackNotifier
 from dp_utils import WeightedFedAvg
+from privacy_attacks import (
+    run_membership_inference_attack,
+    run_gradient_leakage_attack,
+)
 import torch.nn.functional as F
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -320,6 +324,7 @@ class BiTFedSAFTLClient(FedSAFTLClient):
     def __init__(self, client_id, model, device, config, privacy_mechanism=None):
         super().__init__(client_id, model, device)
         self.config = config
+        self.attack_config = config.get('privacy_attacks', {})
         self.use_dp = config.get('privacy', {}).get('enable_privacy', False)
         self.use_amp = False if self.use_dp else config.get('use_amp', True)
         self.aggregation_method = config.get('federated', {}).get('aggregation_method', 'fedavg')
@@ -403,6 +408,27 @@ class BiTFedSAFTLClient(FedSAFTLClient):
             self.privacy_engine_attached = True
             print(f"Client {self.client_id}: Opacus attached to model with A-only optimizer")
 
+        gradient_attack_cfg = self.attack_config.get('gradient_leakage', {})
+        gradient_attack_enabled = bool(gradient_attack_cfg.get('enabled', False))
+        pre_training_A_cpu = None
+        first_batch_delta_cpu = None
+        first_batch_captured = False
+        reference_batch_images = None
+        reference_batch_labels = None
+        attack_lr = None
+
+        if gradient_attack_enabled and hasattr(self._unwrap(), 'get_A_parameters'):
+            pre_training_A_cpu = {
+                name: tensor.detach().cpu()
+                for name, tensor in self._unwrap().get_A_parameters().items()
+            }
+            if self.use_dp and self.dp_optimizer is not None and len(self.dp_optimizer.param_groups) > 0:
+                attack_lr = self.dp_optimizer.param_groups[0].get('lr', training_config.get('lr', 0.001))
+            elif self.optimizer is not None and len(self.optimizer.param_groups) > 0:
+                attack_lr = self.optimizer.param_groups[0].get('lr', training_config.get('lr', 0.001))
+            else:
+                attack_lr = training_config.get('lr', 0.001)
+
         total_loss = 0.0
         correct = 0
         total = 0
@@ -416,6 +442,9 @@ class BiTFedSAFTLClient(FedSAFTLClient):
 
             for batch_idx, (data, target) in enumerate(dataloader):
                 data, target = data.to(self.device), target.to(self.device)
+                if gradient_attack_enabled and reference_batch_images is None:
+                    reference_batch_images = data.detach().float().cpu()
+                    reference_batch_labels = target.detach().cpu()
                 if model_is_half:
                     data = data.half()
 
@@ -445,6 +474,18 @@ class BiTFedSAFTLClient(FedSAFTLClient):
                     self.dp_optimizer.step()
                     self.local_optimizer.step()
 
+                    if (gradient_attack_enabled and not first_batch_captured and
+                            reference_batch_images is not None and pre_training_A_cpu is not None):
+                        post_step_params = {
+                            name: tensor.detach().cpu()
+                            for name, tensor in self._unwrap().get_A_parameters().items()
+                        }
+                        first_batch_delta_cpu = {
+                            name: post_step_params[name] - pre_training_A_cpu[name]
+                            for name in post_step_params if name in pre_training_A_cpu
+                        }
+                        first_batch_captured = True
+
                 elif self.aggregation_method == 'fedsa_shareA_dp':
                     self.dp_optimizer.zero_grad()
                     self.local_optimizer.zero_grad()
@@ -460,6 +501,18 @@ class BiTFedSAFTLClient(FedSAFTLClient):
                     self.dp_optimizer.step()
                     self.local_optimizer.step()
 
+                    if (gradient_attack_enabled and not first_batch_captured and
+                            reference_batch_images is not None and pre_training_A_cpu is not None):
+                        post_step_params = {
+                            name: tensor.detach().cpu()
+                            for name, tensor in self._unwrap().get_A_parameters().items()
+                        }
+                        first_batch_delta_cpu = {
+                            name: post_step_params[name] - pre_training_A_cpu[name]
+                            for name in post_step_params if name in pre_training_A_cpu
+                        }
+                        first_batch_captured = True
+
                 else:
                     self.optimizer.zero_grad()
                     with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
@@ -470,6 +523,18 @@ class BiTFedSAFTLClient(FedSAFTLClient):
                         loss = F.cross_entropy(output, target_for_loss)
                     loss.backward()
                     self.optimizer.step()
+
+                    if (gradient_attack_enabled and not first_batch_captured and
+                            reference_batch_images is not None and pre_training_A_cpu is not None):
+                        post_step_params = {
+                            name: tensor.detach().cpu()
+                            for name, tensor in self._unwrap().get_A_parameters().items()
+                        }
+                        first_batch_delta_cpu = {
+                            name: post_step_params[name] - pre_training_A_cpu[name]
+                            for name in post_step_params if name in pre_training_A_cpu
+                        }
+                        first_batch_captured = True
 
                 epoch_loss += loss.item()
                 pred = output.argmax(dim=1, keepdim=True)
@@ -496,14 +561,32 @@ class BiTFedSAFTLClient(FedSAFTLClient):
         else:
             safe_clear_grad_sample(self.model)
 
+        current_A_params = self._unwrap().get_A_parameters()
+
+        attack_payload = None
+        if (gradient_attack_enabled and pre_training_A_cpu is not None and
+                first_batch_delta_cpu is not None and
+                reference_batch_images is not None and reference_batch_labels is not None):
+            attack_payload = {
+                'initial_A_params': pre_training_A_cpu,
+                'delta_A_params': first_batch_delta_cpu,
+                'batch_images': reference_batch_images,
+                'batch_labels': reference_batch_labels,
+                'lr': attack_lr,
+                'num_classes': self.config.get('model', {}).get('num_classes')
+            }
+
         update = {
-            'A_params': self._unwrap().get_A_parameters(),
+            'A_params': current_A_params,
             'num_samples': self.local_data_size,
             'local_data_size': self.local_data_size,
             'loss': avg_loss,
             'accuracy': accuracy,
             'upload_type': 'A_matrices_only'
         }
+
+        if attack_payload is not None:
+            update['gradient_leakage_payload'] = attack_payload
 
         if self.use_dp and self.aggregation_method == 'fedsa_shareA_dp' and self.privacy_engine_attached:
             delta = self.config.get('privacy', {}).get('delta', 1e-5)
@@ -639,6 +722,24 @@ def main():
                 'name': 'BiT_MNIST_NonIID',
                 'output_dir': 'experiments/quickstart_bit_mnist_svhn'
             },
+            'privacy_attacks': {
+                'membership_inference': {
+                    'enabled': None,
+                    'attack_batch_size': 64,
+                    'max_member_batches': None,
+                    'max_nonmember_batches': None,
+                    'nonmember_source': 'combined_test'
+                },
+                'gradient_leakage': {
+                    'enabled': None,
+                    'optimization_steps': 200,
+                    'attack_lr': 0.1,
+                    'max_layers': 2,
+                    'optimize_labels': True,
+                    'l2_regularizer': 1e-4,
+                    'max_seconds': 10.0
+                }
+            },
             'reproducibility': {
                 'deterministic': False
             }
@@ -663,6 +764,23 @@ def main():
     if args.model:
         config['model']['model_name'] = args.model
 
+    privacy_attack_cfg = config.setdefault('privacy_attacks', {})
+    membership_cfg = privacy_attack_cfg.setdefault('membership_inference', {})
+    membership_cfg.setdefault('enabled', None)
+    membership_cfg.setdefault('attack_batch_size', config['data'].get('batch_size', 64))
+    membership_cfg.setdefault('max_member_batches', None)
+    membership_cfg.setdefault('max_nonmember_batches', None)
+    membership_cfg.setdefault('nonmember_source', 'combined_test')
+
+    gradient_cfg = privacy_attack_cfg.setdefault('gradient_leakage', {})
+    gradient_cfg.setdefault('enabled', None)
+    gradient_cfg.setdefault('optimization_steps', 200)
+    gradient_cfg.setdefault('attack_lr', 0.1)
+    gradient_cfg.setdefault('max_layers', 2)
+    gradient_cfg.setdefault('optimize_labels', True)
+    gradient_cfg.setdefault('l2_regularizer', 1e-4)
+    gradient_cfg.setdefault('max_seconds', 10.0)
+
     device = torch.device('cuda' if config.get('use_gpu', False) and torch.cuda.is_available() else 'cpu')
 
     dataset_label = config['data'].get('dataset_name', 'mnist').upper()
@@ -678,11 +796,23 @@ def main():
     print(f"Test Clients: {config['data'].get('num_test_clients', config['federated']['num_clients'])}")
     print(f"Rounds: {config['federated']['num_rounds']}")
     privacy_enabled = config.get('privacy', {}).get('enable_privacy', False)
+    if membership_cfg.get('enabled') is None:
+        membership_cfg['enabled'] = privacy_enabled
+    if gradient_cfg.get('enabled') is None:
+        gradient_cfg['enabled'] = privacy_enabled
     print(f"Privacy: {'Enabled' if privacy_enabled else 'Disabled'}")
     if privacy_enabled:
         agg_method = config['federated'].get('aggregation_method', 'fedsa')
         if agg_method == 'fedsa_shareA_dp':
             print("Privacy Method: Opacus DP-SGD (A-only, RDP accountant)")
+    if membership_cfg.get('enabled'):
+        print("Membership Inference Attack evaluation: ENABLED")
+    else:
+        print("Membership Inference Attack evaluation: DISABLED")
+    if gradient_cfg.get('enabled'):
+        print("Gradient Leakage Attack evaluation: ENABLED")
+    else:
+        print("Gradient Leakage Attack evaluation: DISABLED")
     print("=" * 80)
 
     if 'seed' in config:
@@ -864,6 +994,8 @@ def main():
 
         client_updates = []
         train_accuracies = []
+        gradient_attack_results = []
+        client_result_map = {}
 
         for client_idx in selected_clients:
 
@@ -881,6 +1013,27 @@ def main():
                 clients[client_idx].update_model({'A_params': server.global_A_params})
 
             client_result = clients[client_idx].train(client_dataloader, config['training'])
+            client_result_map[client_idx] = client_result
+
+            gradient_payload = client_result.pop('gradient_leakage_payload', None)
+            if gradient_payload and gradient_cfg.get('enabled'):
+                try:
+                    gla_metrics = run_gradient_leakage_attack(
+                        clients[client_idx]._unwrap(),
+                        gradient_payload,
+                        device=device,
+                        attack_config=gradient_cfg
+                    )
+                    gla_dict = gla_metrics.to_dict()
+                    gradient_attack_results.append(gla_dict)
+                    client_result['gradient_attack'] = gla_dict
+                    print(f"    Gradient leakage attack -> mse={gla_dict['reconstruction_mse']:.4e}, "
+                          f"label_acc={gla_dict['label_accuracy']:.3f}, "
+                          f"cos={gla_dict['cosine_similarity']:.3f}")
+                except Exception as gla_err:
+                    client_result['gradient_attack_error'] = str(gla_err)
+                    print(f"    Gradient leakage attack failed: {gla_err}")
+
             client_updates.append(client_result)
             train_accuracies.append(client_result['accuracy'])
 
@@ -920,6 +1073,18 @@ def main():
             )
             print(f"  Combined test set: {len(all_test_indices)} samples from {len(test_datasets)} test clients")
 
+            membership_metrics = {}
+            nonmember_loader_for_attack = None
+            if membership_cfg.get('enabled'):
+                attack_batch_size = membership_cfg.get('attack_batch_size', config['data']['batch_size'])
+                nonmember_loader_for_attack = get_client_dataloader(
+                    test_set_ref,
+                    all_test_indices,
+                    batch_size=attack_batch_size,
+                    shuffle=False,
+                    num_workers=config['data'].get('num_workers', 0)
+                )
+
             for client_idx in selected_clients:
                 # Evaluate this training client's personalized model on combined test set
                 test_result = clients[client_idx].evaluate(combined_test_loader)
@@ -927,8 +1092,48 @@ def main():
                 personalized_accuracies.append(test_result['accuracy'])
                 print(f"    Training Client {client_idx} (personalized): {test_result['accuracy']:.2f}%")
 
+                if membership_cfg.get('enabled'):
+                    trainset_eval, train_indices_eval = train_datasets[client_idx]
+                    member_loader = get_client_dataloader(
+                        trainset_eval,
+                        train_indices_eval,
+                        batch_size=membership_cfg.get('attack_batch_size', config['data']['batch_size']),
+                        shuffle=False,
+                        num_workers=config['data'].get('num_workers', 0)
+                    )
+                    try:
+                        mia_result = run_membership_inference_attack(
+                            clients[client_idx]._unwrap(),
+                            member_loader,
+                            nonmember_loader_for_attack,
+                            device=device,
+                            max_member_batches=membership_cfg.get('max_member_batches'),
+                            max_nonmember_batches=membership_cfg.get('max_nonmember_batches')
+                        )
+                        mia_dict = mia_result.to_dict()
+                        membership_metrics[client_idx] = mia_dict
+                        client_result_map[client_idx]['membership_attack'] = mia_dict
+                        print(f"    Membership attack -> acc={mia_result.accuracy:.3f}, auc={mia_result.auc:.3f}, "
+                              f"threshold={mia_result.threshold:.3f}")
+                    except Exception as mia_err:
+                        client_result_map[client_idx]['membership_attack_error'] = str(mia_err)
+                        print(f"    Membership attack failed: {mia_err}")
+
             avg_personalized_acc = sum(personalized_accuracies) / len(personalized_accuracies)
             print(f"  Average Personalized Accuracy: {avg_personalized_acc:.2f}%")
+
+            if membership_metrics:
+                avg_membership_attack_acc = sum(
+                    metric['attack_accuracy'] for metric in membership_metrics.values()
+                ) / len(membership_metrics)
+            else:
+                avg_membership_attack_acc = None
+            if membership_metrics:
+                avg_membership_attack_auc = sum(
+                    metric['auc'] for metric in membership_metrics.values()
+                ) / len(membership_metrics)
+            else:
+                avg_membership_attack_auc = None
 
             client_test_results = personalized_results
             test_accuracies = personalized_accuracies
@@ -937,6 +1142,19 @@ def main():
             personalized_accuracies = None
             avg_personalized_acc = None
             client_test_results = [{'accuracy': 0, 'loss': 0} for _ in selected_clients]
+            avg_membership_attack_acc = None
+            avg_membership_attack_auc = None
+
+        if gradient_attack_results:
+            avg_gradient_recon_mse = sum(
+                metric['reconstruction_mse'] for metric in gradient_attack_results
+            ) / len(gradient_attack_results)
+            avg_gradient_label_acc = sum(
+                metric['label_accuracy'] for metric in gradient_attack_results
+            ) / len(gradient_attack_results)
+        else:
+            avg_gradient_recon_mse = None
+            avg_gradient_label_acc = None
 
         aggregation_method = config['federated'].get('aggregation_method', 'fedsa')
 
@@ -1018,6 +1236,11 @@ def main():
                 is_new_best = True
                 print(f"  ** New best personalized accuracy! **")
 
+        if avg_membership_attack_acc is not None:
+            print(f"  Avg Membership Attack Accuracy: {avg_membership_attack_acc:.3f} (AUC {avg_membership_attack_auc:.3f})")
+        if avg_gradient_recon_mse is not None:
+            print(f"  Avg Gradient Attack MSE: {avg_gradient_recon_mse:.4e}, Label Acc: {avg_gradient_label_acc:.3f}")
+
         print(f"  Communication Cost (per-round): {round_stats.get('communication_cost_mb', 0):.2f} MB")
         print(f"  Round time: {round_time/60:.1f} min ({round_time:.0f}s)")
         print(f"  Total time: {total_time/60:.1f} min ({total_time/3600:.2f}h)")
@@ -1029,12 +1252,17 @@ def main():
             estimated_remaining = avg_round_time * remaining_rounds
             print(f"  Estimated remaining time: {estimated_remaining/3600:.1f}h ({estimated_remaining/60:.0f} min)")
 
-        round_pbar.set_postfix({
+        postfix = {
             'train_acc': f'{avg_train_acc:.2f}%',
             'test_acc': f'{avg_personalized_acc:.2f}%' if avg_personalized_acc else 'N/A',
             'best': f'{best_accuracy:.2f}%',
             'time': f'{round_time:.1f}s'
-        })
+        }
+        if avg_membership_attack_acc is not None:
+            postfix['mia_acc'] = f'{avg_membership_attack_acc:.2f}'
+        if avg_gradient_recon_mse is not None:
+            postfix['gl_mse'] = f'{avg_gradient_recon_mse:.2e}'
+        round_pbar.set_postfix(postfix)
 
         round_result = {
             'round': round_idx + 1,
@@ -1050,6 +1278,31 @@ def main():
 
         if current_epsilon is not None:
             round_result['epsilon'] = current_epsilon
+
+        if avg_membership_attack_acc is not None:
+            round_result['avg_membership_attack_accuracy'] = avg_membership_attack_acc
+            round_result['avg_membership_attack_auc'] = avg_membership_attack_auc
+        if avg_gradient_recon_mse is not None:
+            round_result['avg_gradient_attack_mse'] = avg_gradient_recon_mse
+            round_result['avg_gradient_attack_label_accuracy'] = avg_gradient_label_acc
+
+        client_attack_summary = {}
+        for client_idx in selected_clients:
+            client_metrics = client_result_map.get(client_idx, {})
+            attacks = {}
+            if 'membership_attack' in client_metrics:
+                attacks['membership_attack'] = client_metrics['membership_attack']
+            if 'gradient_attack' in client_metrics:
+                attacks['gradient_attack'] = client_metrics['gradient_attack']
+            if 'membership_attack_error' in client_metrics:
+                attacks['membership_attack_error'] = client_metrics['membership_attack_error']
+            if 'gradient_attack_error' in client_metrics:
+                attacks['gradient_attack_error'] = client_metrics['gradient_attack_error']
+            if attacks:
+                client_attack_summary[str(client_idx)] = attacks
+
+        if client_attack_summary:
+            round_result['client_attack_metrics'] = client_attack_summary
 
         results['rounds'].append(round_result)
 
@@ -1125,6 +1378,38 @@ def main():
         'dataset': dataset_name.upper()
     }
 
+    membership_acc_values = [
+        r.get('avg_membership_attack_accuracy') for r in results['rounds']
+        if r.get('avg_membership_attack_accuracy') is not None
+    ]
+    if membership_acc_values:
+        results['summary']['avg_membership_attack_accuracy_mean'] = sum(membership_acc_values) / len(membership_acc_values)
+        results['summary']['avg_membership_attack_accuracy_last'] = membership_acc_values[-1]
+
+    membership_auc_values = [
+        r.get('avg_membership_attack_auc') for r in results['rounds']
+        if r.get('avg_membership_attack_auc') is not None
+    ]
+    if membership_auc_values:
+        results['summary']['avg_membership_attack_auc_mean'] = sum(membership_auc_values) / len(membership_auc_values)
+        results['summary']['avg_membership_attack_auc_last'] = membership_auc_values[-1]
+
+    gradient_mse_values = [
+        r.get('avg_gradient_attack_mse') for r in results['rounds']
+        if r.get('avg_gradient_attack_mse') is not None
+    ]
+    if gradient_mse_values:
+        results['summary']['avg_gradient_attack_mse_mean'] = sum(gradient_mse_values) / len(gradient_mse_values)
+        results['summary']['avg_gradient_attack_mse_last'] = gradient_mse_values[-1]
+
+    gradient_label_values = [
+        r.get('avg_gradient_attack_label_accuracy') for r in results['rounds']
+        if r.get('avg_gradient_attack_label_accuracy') is not None
+    ]
+    if gradient_label_values:
+        results['summary']['avg_gradient_attack_label_accuracy_mean'] = sum(gradient_label_values) / len(gradient_label_values)
+        results['summary']['avg_gradient_attack_label_accuracy_last'] = gradient_label_values[-1]
+
     final_results_file = experiment_dir / f'final_results_{date_bit_suffix}.json'
 
     try:
@@ -1148,6 +1433,12 @@ def main():
             }
             if 'epsilon' in round_data:
                 row_data['epsilon'] = round_data['epsilon']
+            if 'avg_membership_attack_accuracy' in round_data:
+                row_data['membership_attack_accuracy'] = round_data['avg_membership_attack_accuracy']
+                row_data['membership_attack_auc'] = round_data.get('avg_membership_attack_auc')
+            if 'avg_gradient_attack_mse' in round_data:
+                row_data['gradient_attack_mse'] = round_data['avg_gradient_attack_mse']
+                row_data['gradient_attack_label_accuracy'] = round_data.get('avg_gradient_attack_label_accuracy')
             df_data.append(row_data)
 
         if df_data:
@@ -1178,6 +1469,16 @@ def main():
     print(f"Total Communication: {total_comm_mb:.2f} MB")
     print(f"Average per-round: {avg_per_round_mb:.2f} MB/round")
     print(f"Training Duration: {training_duration / 3600:.2f} hours")
+    summary_data = results.get('summary', {})
+    if 'avg_membership_attack_accuracy_mean' in summary_data:
+        print(f"Membership Attack Accuracy → mean: {summary_data['avg_membership_attack_accuracy_mean']:.3f}, "
+              f"last round: {summary_data['avg_membership_attack_accuracy_last']:.3f}")
+    if 'avg_gradient_attack_mse_mean' in summary_data:
+        print(f"Gradient Attack MSE → mean: {summary_data['avg_gradient_attack_mse_mean']:.4e}, "
+              f"last round: {summary_data['avg_gradient_attack_mse_last']:.4e}")
+    if 'avg_gradient_attack_label_accuracy_mean' in summary_data:
+        print(f"Gradient Attack Label Accuracy → mean: {summary_data['avg_gradient_attack_label_accuracy_mean']:.3f}, "
+              f"last round: {summary_data['avg_gradient_attack_label_accuracy_last']:.3f}")
     print(f"Results saved to: {experiment_dir}")
     print(f"  - Training results: final_results_{date_bit_suffix}.json")
     if csv_file:
