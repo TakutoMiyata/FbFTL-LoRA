@@ -57,8 +57,22 @@ privacy_attacks:
     attack_batch_size: 64
     max_member_batches: 5
     max_nonmember_batches: 5
+    method: shadow
+    shadow:
+      lr: 0.05
+      train_steps: 300
+      batch_size: 256
+      weight_decay: 0.0
+      feature_set: [delta_l2, delta_abs_mean, delta_var, delta_max_abs]
+      feature_update_lr: 0.1
+      feature_update_steps: 1
+      normalize: true
   gradient_leakage:
     enabled: true
+    attack_mode: trajectory
+    trajectory_rounds: 3
+    trajectory_min_rounds: 2
+    trajectory_only: false
     optimization_steps: 150
     attack_lr: 0.2
     max_layers: 2

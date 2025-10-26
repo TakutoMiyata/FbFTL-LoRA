@@ -34,6 +34,7 @@ class MembershipAttackResult:
     nonmember_loss_std: float
     num_members: int
     num_nonmembers: int
+    method: str = 'threshold'
 
     def to_dict(self) -> Dict[str, float]:
         return {
@@ -48,6 +49,7 @@ class MembershipAttackResult:
             'nonmember_loss_std': float(self.nonmember_loss_std),
             'num_members': int(self.num_members),
             'num_nonmembers': int(self.num_nonmembers),
+            'method': self.method,
         }
 
 
@@ -127,6 +129,192 @@ def _collect_losses(
     return torch.cat(losses)
 
 
+def _collect_attack_features(
+    model: nn.Module,
+    dataloader: DataLoader,
+    device: torch.device,
+    feature_set: Sequence[str],
+    max_batches: Optional[int] = None,
+    feature_cfg: Optional[Dict] = None,
+) -> torch.Tensor:
+    """
+    Collect per-sample features derived from LoRA A-matrix updates (ΔA statistics).
+    This simulates a shadow training step that only yields information observable by the server.
+    """
+    normalized_feature_set = [feat.lower() for feat in feature_set]
+    if not normalized_feature_set:
+        raise ValueError("feature_set must contain at least one feature name.")
+
+    feature_cfg = feature_cfg or {}
+    shadow_step_lr = float(feature_cfg.get('feature_update_lr', 0.1))
+    shadow_step_count = max(int(feature_cfg.get('feature_update_steps', 1)), 1)
+    detach_after_step = bool(feature_cfg.get('feature_detach', True))
+
+    if not hasattr(model, 'get_A_parameters') or not hasattr(model, 'get_A_parameter_groups'):
+        raise ValueError("Model must expose get_A_parameters/get_A_parameter_groups for ΔA-based attacks.")
+
+    shadow_model = copy.deepcopy(model).to(device)
+    base_state = copy.deepcopy(shadow_model.state_dict())
+    was_training = shadow_model.training
+
+    collected: List[torch.Tensor] = []
+    batches_processed = 0
+
+    for batch_idx, (data, target) in enumerate(dataloader):
+        data = data.to(device, non_blocking=True)
+        target = target.to(device, non_blocking=True)
+
+        shadow_model.load_state_dict(base_state)
+        shadow_model.train()
+
+        optimizer = torch.optim.SGD(
+            shadow_model.get_A_parameter_groups(),
+            lr=shadow_step_lr,
+        )
+
+        initial_A = shadow_model.get_A_parameters()
+        for step in range(shadow_step_count):
+            optimizer.zero_grad()
+            logits = shadow_model(data)
+            if target.dim() > 1:
+                labels = target.argmax(dim=1)
+            else:
+                labels = target
+            loss = F.cross_entropy(logits, labels)
+            loss.backward()
+            optimizer.step()
+
+        updated_A = shadow_model.get_A_parameters()
+
+        delta_vectors = []
+        for name, initial_tensor in initial_A.items():
+            updated_tensor = updated_A[name]
+            delta = updated_tensor.to(device) - initial_tensor.to(device)
+            delta_vectors.append(delta.flatten())
+
+        if not delta_vectors:
+            continue
+
+        delta_concat = torch.cat(delta_vectors)
+
+        feature_values: List[torch.Tensor] = []
+        for feat in normalized_feature_set:
+            if feat == 'delta_l2':
+                feature_values.append(delta_concat.norm(p=2).unsqueeze(0))
+            elif feat == 'delta_mean':
+                feature_values.append(delta_concat.mean().unsqueeze(0))
+            elif feat == 'delta_abs_mean':
+                feature_values.append(delta_concat.abs().mean().unsqueeze(0))
+            elif feat == 'delta_var':
+                feature_values.append(delta_concat.var(unbiased=False).unsqueeze(0))
+            elif feat == 'delta_max_abs':
+                feature_values.append(delta_concat.abs().max().unsqueeze(0))
+            else:
+                raise ValueError(f"Unsupported feature '{feat}' for ΔA-based membership attack.")
+
+        batch_features = torch.cat(feature_values, dim=0).unsqueeze(0).cpu()
+        collected.append(batch_features)
+
+        batches_processed += 1
+        if max_batches is not None and batches_processed >= max_batches:
+            break
+
+    if detach_after_step:
+        shadow_model.cpu()
+    if was_training is False:
+        shadow_model.eval()
+
+    if not collected:
+        return torch.empty(0, len(normalized_feature_set))
+
+    return torch.cat(collected, dim=0)
+
+
+def _run_shadow_membership_attack(
+    member_features: torch.Tensor,
+    nonmember_features: torch.Tensor,
+    shadow_cfg: Dict,
+    member_loss_mean: float,
+    nonmember_loss_mean: float,
+    member_loss_std: float,
+    nonmember_loss_std: float,
+) -> MembershipAttackResult:
+    """
+    Train a lightweight linear classifier on attack features to infer membership.
+    """
+    if member_features.numel() == 0 or nonmember_features.numel() == 0:
+        raise ValueError("Shadow attack requires non-empty feature tensors.")
+
+    feature_dim = member_features.shape[1]
+    normalize = shadow_cfg.get('normalize', True)
+
+    full_features = torch.cat([member_features, nonmember_features], dim=0)
+    full_labels = torch.cat([
+        torch.ones(member_features.shape[0], dtype=torch.float32),
+        torch.zeros(nonmember_features.shape[0], dtype=torch.float32),
+    ], dim=0)
+
+    if normalize:
+        mean = full_features.mean(dim=0, keepdim=True)
+        std = full_features.std(dim=0, keepdim=True).clamp_min(1e-6)
+        member_features = (member_features - mean) / std
+        nonmember_features = (nonmember_features - mean) / std
+        full_features = (full_features - mean) / std
+
+    num_samples = full_features.shape[0]
+    indices = torch.randperm(num_samples)
+    full_features = full_features[indices]
+    full_labels = full_labels[indices]
+
+    model = nn.Linear(feature_dim, 1)
+    train_steps = int(shadow_cfg.get('train_steps', 300))
+    batch_size = int(shadow_cfg.get('batch_size', 256))
+    lr = float(shadow_cfg.get('lr', 0.05))
+    weight_decay = float(shadow_cfg.get('weight_decay', 0.0))
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+    for step in range(max(train_steps, 1)):
+        if num_samples <= batch_size:
+            batch_idx = torch.arange(num_samples)
+        else:
+            batch_idx = torch.randint(0, num_samples, (batch_size,))
+        logits = model(full_features[batch_idx])
+        loss = F.binary_cross_entropy_with_logits(logits.squeeze(1), full_labels[batch_idx])
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    with torch.no_grad():
+        member_scores = model(member_features).squeeze(1).cpu().numpy()
+        nonmember_scores = model(nonmember_features).squeeze(1).cpu().numpy()
+
+    all_scores = np.concatenate([member_scores, nonmember_scores])
+    labels = np.concatenate([
+        np.ones_like(member_scores),
+        np.zeros_like(nonmember_scores),
+    ])
+
+    threshold, accuracy, tpr, fpr = _search_best_threshold(all_scores, labels)
+    auc = _compute_auc(member_scores, nonmember_scores)
+
+    return MembershipAttackResult(
+        accuracy=accuracy,
+        threshold=threshold,
+        tpr=tpr,
+        fpr=fpr,
+        auc=auc,
+        member_loss_mean=member_loss_mean,
+        nonmember_loss_mean=nonmember_loss_mean,
+        member_loss_std=member_loss_std,
+        nonmember_loss_std=nonmember_loss_std,
+        num_members=int(member_features.shape[0]),
+        num_nonmembers=int(nonmember_features.shape[0]),
+        method='shadow',
+    )
+
+
 def _compute_auc(member_scores: np.ndarray, nonmember_scores: np.ndarray) -> float:
     if member_scores.size == 0 or nonmember_scores.size == 0:
         return float('nan')
@@ -181,6 +369,8 @@ def run_membership_inference_attack(
     device: torch.device,
     max_member_batches: Optional[int] = None,
     max_nonmember_batches: Optional[int] = None,
+    method: str = 'threshold',
+    shadow_config: Optional[Dict] = None,
 ) -> MembershipAttackResult:
     """
     Perform a loss-threshold membership inference attack.
@@ -191,31 +381,72 @@ def run_membership_inference_attack(
     if member_losses.numel() == 0 or nonmember_losses.numel() == 0:
         raise ValueError("Cannot run membership inference attack with zero samples.")
 
+    attack_method = (method or 'threshold').lower()
+    if attack_method not in {'threshold', 'shadow'}:
+        raise ValueError(f"Unsupported membership attack method: {method}")
+
     member_scores = -member_losses.numpy()
     nonmember_scores = -nonmember_losses.numpy()
 
-    all_scores = np.concatenate([member_scores, nonmember_scores])
-    labels = np.concatenate([
-        np.ones_like(member_scores),
-        np.zeros_like(nonmember_scores),
-    ])
+    member_loss_mean = float(member_losses.mean().item())
+    nonmember_loss_mean = float(nonmember_losses.mean().item())
+    member_loss_std = float(member_losses.std(unbiased=False).item())
+    nonmember_loss_std = float(nonmember_losses.std(unbiased=False).item())
 
-    threshold, accuracy, tpr, fpr = _search_best_threshold(all_scores, labels)
-    auc = _compute_auc(member_scores, nonmember_scores)
+    if attack_method == 'threshold':
+        all_scores = np.concatenate([member_scores, nonmember_scores])
+        labels = np.concatenate([
+            np.ones_like(member_scores),
+            np.zeros_like(nonmember_scores),
+        ])
 
-    return MembershipAttackResult(
-        accuracy=accuracy,
-        threshold=threshold,
-        tpr=tpr,
-        fpr=fpr,
-        auc=auc,
-        member_loss_mean=float(member_losses.mean().item()),
-        nonmember_loss_mean=float(nonmember_losses.mean().item()),
-        member_loss_std=float(member_losses.std(unbiased=False).item()),
-        nonmember_loss_std=float(nonmember_losses.std(unbiased=False).item()),
-        num_members=int(member_losses.numel()),
-        num_nonmembers=int(nonmember_losses.numel()),
+        threshold, accuracy, tpr, fpr = _search_best_threshold(all_scores, labels)
+        auc = _compute_auc(member_scores, nonmember_scores)
+
+        return MembershipAttackResult(
+            accuracy=accuracy,
+            threshold=threshold,
+            tpr=tpr,
+            fpr=fpr,
+            auc=auc,
+            member_loss_mean=member_loss_mean,
+            nonmember_loss_mean=nonmember_loss_mean,
+            member_loss_std=member_loss_std,
+            nonmember_loss_std=nonmember_loss_std,
+            num_members=int(member_losses.numel()),
+            num_nonmembers=int(nonmember_losses.numel()),
+            method='threshold',
+        )
+
+    shadow_cfg = shadow_config or {}
+    feature_set = shadow_cfg.get('feature_set', ['loss', 'confidence', 'entropy'])
+    member_features = _collect_attack_features(
+        model,
+        member_loader,
+        device,
+        feature_set=feature_set,
+        max_batches=max_member_batches,
+        feature_cfg=shadow_cfg,
     )
+    nonmember_features = _collect_attack_features(
+        model,
+        nonmember_loader,
+        device,
+        feature_set=feature_set,
+        max_batches=max_nonmember_batches,
+        feature_cfg=shadow_cfg,
+    )
+
+    result = _run_shadow_membership_attack(
+        member_features,
+        nonmember_features,
+        shadow_cfg,
+        member_loss_mean,
+        nonmember_loss_mean,
+        member_loss_std,
+        nonmember_loss_std,
+    )
+    return result
 
 
 def _prepare_attack_parameters(
@@ -400,3 +631,62 @@ def run_gradient_leakage_attack(
         attacked_layers=attacked_layers,
     )
 
+
+def combine_gradient_payloads(
+    payloads: Sequence[Dict],
+    max_payloads: Optional[int] = None,
+) -> Dict:
+    """
+    Combine multiple gradient payloads (e.g., across rounds) into a single averaged payload.
+    """
+    if not payloads:
+        raise ValueError("combine_gradient_payloads requires at least one payload.")
+
+    if max_payloads is not None and max_payloads > 0:
+        payloads = list(payloads)[-max_payloads:]
+    else:
+        payloads = list(payloads)
+
+    latest = payloads[-1]
+    lr_values = [float(p.get('lr', 0.001)) for p in payloads]
+
+    combined_delta: Dict[str, torch.Tensor] = {}
+    layer_counts: Dict[str, int] = {}
+
+    for payload in payloads:
+        for name, tensor in payload['delta_A_params'].items():
+            if name not in combined_delta:
+                combined_delta[name] = tensor.clone()
+                layer_counts[name] = 1
+            else:
+                combined_delta[name] += tensor
+                layer_counts[name] += 1
+
+    for name, tensor in combined_delta.items():
+        combined_delta[name] = tensor / layer_counts[name]
+
+    image_batches = [payload['batch_images'] for payload in payloads if payload.get('batch_images') is not None]
+    label_batches = [payload['batch_labels'] for payload in payloads if payload.get('batch_labels') is not None]
+    if not image_batches or not label_batches:
+        raise ValueError("Gradient payloads must contain batch_images and batch_labels.")
+
+    combined_images = torch.cat(image_batches, dim=0)
+    combined_labels = torch.cat(label_batches, dim=0)
+
+    combined_payload = {
+        'initial_A_params': {
+            name: tensor.clone()
+            for name, tensor in latest['initial_A_params'].items()
+        },
+        'delta_A_params': combined_delta,
+        'batch_images': combined_images,
+        'batch_labels': combined_labels,
+        'lr': float(sum(lr_values) / len(lr_values)),
+        'num_classes': latest.get('num_classes'),
+        'trajectory_metadata': {
+            'num_payloads': len(payloads),
+            'total_samples': combined_images.shape[0],
+        }
+    }
+
+    return combined_payload

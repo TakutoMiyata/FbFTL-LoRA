@@ -15,6 +15,7 @@ import random
 import json
 import time
 from datetime import datetime
+from collections import defaultdict, deque
 
 import torchvision
 import torchvision.transforms as transforms
@@ -311,6 +312,7 @@ from dp_utils import WeightedFedAvg
 from privacy_attacks import (
     run_membership_inference_attack,
     run_gradient_leakage_attack,
+    combine_gradient_payloads,
 )
 import torch.nn.functional as F
 
@@ -728,7 +730,18 @@ def main():
                     'attack_batch_size': 64,
                     'max_member_batches': None,
                     'max_nonmember_batches': None,
-                    'nonmember_source': 'combined_test'
+                    'nonmember_source': 'combined_test',
+                    'method': 'threshold',
+                    'shadow': {
+                        'lr': 0.05,
+                        'train_steps': 300,
+                        'batch_size': 256,
+                        'weight_decay': 0.0,
+                        'feature_set': ['delta_l2', 'delta_abs_mean', 'delta_var', 'delta_max_abs'],
+                        'feature_update_lr': 0.1,
+                        'feature_update_steps': 1,
+                        'normalize': True,
+                    }
                 },
                 'gradient_leakage': {
                     'enabled': None,
@@ -737,7 +750,11 @@ def main():
                     'max_layers': 2,
                     'optimize_labels': True,
                     'l2_regularizer': 1e-4,
-                    'max_seconds': 10.0
+                    'max_seconds': 10.0,
+                    'attack_mode': 'single',
+                    'trajectory_rounds': 3,
+                    'trajectory_min_rounds': 2,
+                    'trajectory_only': False,
                 }
             },
             'reproducibility': {
@@ -771,6 +788,16 @@ def main():
     membership_cfg.setdefault('max_member_batches', None)
     membership_cfg.setdefault('max_nonmember_batches', None)
     membership_cfg.setdefault('nonmember_source', 'combined_test')
+    membership_cfg.setdefault('method', 'threshold')
+    shadow_cfg = membership_cfg.setdefault('shadow', {})
+    shadow_cfg.setdefault('lr', 0.05)
+    shadow_cfg.setdefault('train_steps', 300)
+    shadow_cfg.setdefault('batch_size', 256)
+    shadow_cfg.setdefault('weight_decay', 0.0)
+    shadow_cfg.setdefault('feature_set', ['delta_l2', 'delta_abs_mean', 'delta_var', 'delta_max_abs'])
+    shadow_cfg.setdefault('feature_update_lr', 0.1)
+    shadow_cfg.setdefault('feature_update_steps', 1)
+    shadow_cfg.setdefault('normalize', True)
 
     gradient_cfg = privacy_attack_cfg.setdefault('gradient_leakage', {})
     gradient_cfg.setdefault('enabled', None)
@@ -780,6 +807,10 @@ def main():
     gradient_cfg.setdefault('optimize_labels', True)
     gradient_cfg.setdefault('l2_regularizer', 1e-4)
     gradient_cfg.setdefault('max_seconds', 10.0)
+    gradient_cfg.setdefault('attack_mode', 'single')
+    gradient_cfg.setdefault('trajectory_rounds', 3)
+    gradient_cfg.setdefault('trajectory_min_rounds', 2)
+    gradient_cfg.setdefault('trajectory_only', False)
 
     device = torch.device('cuda' if config.get('use_gpu', False) and torch.cuda.is_available() else 'cpu')
 
@@ -937,6 +968,13 @@ def main():
     train_client_ids = list(range(client_info['num_train_clients']))
     test_client_ids = list(range(client_info['num_test_clients']))
 
+    actual_train_clients = len(train_client_ids)
+    configured_train_clients = config['federated'].get('num_clients', actual_train_clients)
+    if configured_train_clients != actual_train_clients:
+        print(f"⚠️  Config requested {configured_train_clients} training clients but dataset provides "
+              f"{actual_train_clients}. Using available clients.")
+        config['federated']['num_clients'] = actual_train_clients
+
     for i, client_id in enumerate(train_client_ids):
         privacy_mechanism = None
         if privacy_enabled:
@@ -969,20 +1007,23 @@ def main():
     print(f"Starting BiT federated training with {dataset_name.upper()}...")
     print("=" * 80)
 
+    gradient_history_len = max(int(gradient_cfg.get('trajectory_rounds', 3)), 1)
+    gradient_attack_history = defaultdict(lambda: deque(maxlen=gradient_history_len)) if gradient_cfg.get('enabled') else None
+
     best_accuracy = 0
     best_round = 0
     start_time = time.time()
 
     round_pbar = tqdm(range(config['federated']['num_rounds']),
-                     desc="Federated Rounds",
-                     unit="round")
+                        desc="Federated Rounds",
+                        unit="round")
 
     for round_idx in round_pbar:
         print(f"\n[Round {round_idx + 1}/{config['federated']['num_rounds']}]")
         round_start_time = time.time()
 
         client_fraction = config['federated'].get('client_fraction', 1.0)
-        num_clients = config['federated']['num_clients']
+        num_clients = len(clients)
         num_selected = max(1, int(np.ceil(client_fraction * num_clients)))
 
         if client_fraction >= 1.0:
@@ -990,7 +1031,9 @@ def main():
         else:
             selected_clients = sorted(random.sample(range(num_clients), num_selected))
 
-        print(f"Selected clients: {selected_clients}")
+        selected_clients = sorted(selected_clients)
+        first_client = selected_clients[0]
+        print(f"Selected clients: {selected_clients} (first processed client: {first_client})")
 
         client_updates = []
         train_accuracies = []
@@ -1017,22 +1060,53 @@ def main():
 
             gradient_payload = client_result.pop('gradient_leakage_payload', None)
             if gradient_payload and gradient_cfg.get('enabled'):
-                try:
-                    gla_metrics = run_gradient_leakage_attack(
-                        clients[client_idx]._unwrap(),
-                        gradient_payload,
-                        device=device,
-                        attack_config=gradient_cfg
-                    )
-                    gla_dict = gla_metrics.to_dict()
-                    gradient_attack_results.append(gla_dict)
-                    client_result['gradient_attack'] = gla_dict
-                    print(f"    Gradient leakage attack -> mse={gla_dict['reconstruction_mse']:.4e}, "
-                          f"label_acc={gla_dict['label_accuracy']:.3f}, "
-                          f"cos={gla_dict['cosine_similarity']:.3f}")
-                except Exception as gla_err:
-                    client_result['gradient_attack_error'] = str(gla_err)
-                    print(f"    Gradient leakage attack failed: {gla_err}")
+                payload_for_attack = gradient_payload
+                attack_mode = gradient_cfg.get('attack_mode', 'single')
+
+                if attack_mode == 'trajectory' and gradient_attack_history is not None:
+                    history = gradient_attack_history[client_idx]
+                    history.append(gradient_payload)
+                    min_rounds = max(int(gradient_cfg.get('trajectory_min_rounds', 2)), 2)
+                    available_history = list(history)
+                    if len(available_history) >= min_rounds:
+                        try:
+                            history_cap = gradient_cfg.get('trajectory_rounds')
+                            max_payloads = int(history_cap) if history_cap else len(available_history)
+                            payload_for_attack = combine_gradient_payloads(
+                                available_history,
+                                max_payloads=max_payloads,
+                            )
+                        except Exception as combine_err:
+                            payload_for_attack = None
+                            client_result['gradient_attack_error'] = f"trajectory_build_failed: {combine_err}"
+                    elif gradient_cfg.get('trajectory_only', False):
+                        payload_for_attack = None
+                elif gradient_attack_history is not None:
+                    # Clear any stale history when reverting to single-step attacks
+                    gradient_attack_history[client_idx].clear()
+
+                if payload_for_attack is not None:
+                    try:
+                        gla_metrics = run_gradient_leakage_attack(
+                            clients[client_idx]._unwrap(),
+                            payload_for_attack,
+                            device=device,
+                            attack_config=gradient_cfg
+                        )
+                        gla_dict = gla_metrics.to_dict()
+                        gradient_attack_results.append(gla_dict)
+                        client_result['gradient_attack'] = gla_dict
+                        traj_meta = payload_for_attack.get('trajectory_metadata')
+                        traj_suffix = ""
+                        if traj_meta:
+                            traj_suffix = f" (trajectory depth={traj_meta.get('num_payloads')})"
+                        print(f"    Gradient leakage attack{traj_suffix} -> "
+                              f"mse={gla_dict['reconstruction_mse']:.4e}, "
+                              f"label_acc={gla_dict['label_accuracy']:.3f}, "
+                              f"cos={gla_dict['cosine_similarity']:.3f}")
+                    except Exception as gla_err:
+                        client_result['gradient_attack_error'] = str(gla_err)
+                        print(f"    Gradient leakage attack failed: {gla_err}")
 
             client_updates.append(client_result)
             train_accuracies.append(client_result['accuracy'])
@@ -1108,12 +1182,15 @@ def main():
                             nonmember_loader_for_attack,
                             device=device,
                             max_member_batches=membership_cfg.get('max_member_batches'),
-                            max_nonmember_batches=membership_cfg.get('max_nonmember_batches')
+                            max_nonmember_batches=membership_cfg.get('max_nonmember_batches'),
+                            method=membership_cfg.get('method', 'threshold'),
+                            shadow_config=membership_cfg.get('shadow', {}),
                         )
                         mia_dict = mia_result.to_dict()
                         membership_metrics[client_idx] = mia_dict
                         client_result_map[client_idx]['membership_attack'] = mia_dict
-                        print(f"    Membership attack -> acc={mia_result.accuracy:.3f}, auc={mia_result.auc:.3f}, "
+                        print(f"    Membership attack ({membership_cfg.get('method', 'threshold')}) -> "
+                              f"acc={mia_result.accuracy:.3f}, auc={mia_result.auc:.3f}, "
                               f"threshold={mia_result.threshold:.3f}")
                     except Exception as mia_err:
                         client_result_map[client_idx]['membership_attack_error'] = str(mia_err)

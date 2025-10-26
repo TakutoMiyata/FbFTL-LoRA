@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader, Subset
 import numpy as np
 from typing import List, Tuple, Dict, Optional, Callable
 import random
+import warnings
 
 # ImageNet normalization constants
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -404,8 +405,25 @@ def get_client_dataloader(dataset, client_indices: List[int], batch_size: int,
             'num_workers': num_workers,
             'pin_memory': True
         }
-    
-    return DataLoader(client_dataset, **loader_kwargs)
+
+    def _build_loader(kwargs):
+        return DataLoader(client_dataset, **kwargs)
+
+    try:
+        return _build_loader(loader_kwargs)
+    except (PermissionError, OSError, RuntimeError) as err:
+        if loader_kwargs.get('num_workers', 0) > 0:
+            warnings.warn(
+                f"DataLoader worker startup failed ({err}). Falling back to num_workers=0.",
+                RuntimeWarning,
+            )
+            fallback_kwargs = dict(loader_kwargs)
+            fallback_kwargs['num_workers'] = 0
+            fallback_kwargs['pin_memory'] = False
+            fallback_kwargs.pop('persistent_workers', None)
+            fallback_kwargs.pop('prefetch_factor', None)
+            return _build_loader(fallback_kwargs)
+        raise
 
 
 def analyze_data_distribution(dataset, client_indices: List[List[int]], num_classes: int = 100):
