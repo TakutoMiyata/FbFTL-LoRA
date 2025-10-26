@@ -1,16 +1,16 @@
-seed: 123
+seed: 42
 use_gpu: true
 
 data:
   dataset_name: mnist
   data_dir: ./data
-  num_clients: 5
-  num_test_clients: 5
+  num_clients: 10
+  num_test_clients: 10
   batch_size: 32
-  num_workers: 2
+  num_workers: 4
   input_size: 224
   verbose: false
-  data_split: non_iid
+  data_split: iid
   alpha: 0.3
 
 model:

@@ -265,7 +265,7 @@ class BiTFedSAFTLClientEpsilon(FedSAFTLClient):
         total_batches = 0
 
         model_is_half = next(self.model.parameters()).dtype == torch.float16
-        scaler = torch.amp.GradScaler('cuda') if (self.use_amp and torch.cuda.is_available() and not model_is_half) else None
+        scaler = torch.cuda.amp.GradScaler() if (self.use_amp and torch.cuda.is_available() and not model_is_half) else None
 
         for epoch in range(num_epochs):
             epoch_loss = 0.0
@@ -299,7 +299,7 @@ class BiTFedSAFTLClientEpsilon(FedSAFTLClient):
 
                 else:
                     self.optimizer.zero_grad()
-                    with torch.amp.autocast('cuda', enabled=self.use_amp and scaler is not None):
+                    with torch.cuda.amp.autocast(enabled=self.use_amp and scaler is not None):
                         output = self.model(data)
                     if len(target.shape) > 1:
                         loss = -(target_for_loss * F.log_softmax(output, dim=1)).sum(dim=1).mean()

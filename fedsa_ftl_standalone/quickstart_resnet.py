@@ -41,17 +41,22 @@ except ImportError:
 
 # GradScaler compatibility for different PyTorch versions
 try:
-    # PyTorch 2.0+ uses torch.amp.GradScaler and torch.amp.autocast
-    from torch.amp import GradScaler, autocast
-    def create_grad_scaler(device='cuda'):
-        return GradScaler(device)
-    def create_autocast(device='cuda', enabled=True):
-        return autocast(device, enabled=enabled)
-except (ImportError, AttributeError):
-    # PyTorch 1.x uses torch.cuda.amp.GradScaler and torch.cuda.amp.autocast
     from torch.cuda.amp import GradScaler, autocast
+
     def create_grad_scaler(device='cuda'):
         return GradScaler()
+
+    def create_autocast(device='cuda', enabled=True):
+        try:
+            return autocast(device_type=device, enabled=enabled)
+        except TypeError:
+            return autocast(enabled=enabled)
+except (ImportError, AttributeError):
+    from torch.cuda.amp import GradScaler, autocast
+
+    def create_grad_scaler(device='cuda'):
+        return GradScaler()
+
     def create_autocast(device='cuda', enabled=True):
         return autocast(enabled=enabled)
 

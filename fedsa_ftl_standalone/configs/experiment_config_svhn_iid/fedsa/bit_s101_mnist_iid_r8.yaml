@@ -55,7 +55,7 @@ training:
 federated:
   num_rounds: 100
   num_clients: 10
-  client_fraction: 0.3
+  client_fraction: 1.0
   aggregation_method: fedsa
   checkpoint_freq: 25
   exclude_bn_from_agg: true
