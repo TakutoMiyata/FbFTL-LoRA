@@ -7,7 +7,7 @@ data:
   num_clients: 10
   num_test_clients: 10
   batch_size: 32
-  num_workers: 2
+  num_workers: 4
   input_size: 224
   verbose: false
   data_split: iid
@@ -39,10 +39,12 @@ federated:
 
 privacy:
   enable_privacy: true
-  epsilon: 6.0
-  delta: 1.0e-5
+  epsilon: 2.0
+  delta: 1.0e-05
   max_grad_norm: 0.5
-  noise_multiplier: 1.2
+  noise_multiplier: 3.8
+  target: lora_A
+  use_opacus_accounting: true
 
 evaluation:
   eval_freq: 2
@@ -54,28 +56,28 @@ experiment:
 privacy_attacks:
   membership_inference:
     enabled: true
-    attack_batch_size: 64
-    max_member_batches: 5
-    max_nonmember_batches: 5
+    attack_batch_size: 32
+    max_member_batches: 10
+    max_nonmember_batches: 10
     method: shadow
     shadow:
       lr: 0.05
-      train_steps: 300
-      batch_size: 256
+      train_steps: 400
+      batch_size: 32
       weight_decay: 0.0
-      feature_set: [delta_l2, delta_abs_mean, delta_var, delta_max_abs]
+      feature_set: [delta_l2, delta_abs_mean]
       feature_update_lr: 0.1
       feature_update_steps: 1
       normalize: true
   gradient_leakage:
-    enabled: true
+    enabled: false
     attack_mode: trajectory
-    trajectory_rounds: 3
+    trajectory_rounds: 4
     trajectory_min_rounds: 2
     trajectory_only: false
-    optimization_steps: 150
-    attack_lr: 0.2
-    max_layers: 2
+    optimization_steps: 400
+    attack_lr: 0.25
+    max_layers: 4
     optimize_labels: true
     l2_regularizer: 1.0e-4
-    max_seconds: 5.0
+    max_seconds: 12.0
