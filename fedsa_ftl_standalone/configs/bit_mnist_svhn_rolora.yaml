@@ -1,0 +1,95 @@
+experiment:
+  name: BiT_MNIST_SVHN_RoLoRA_DP
+  output_dir: experiments/quickstart_bit_mnist_svhn
+
+use_gpu: true
+
+data:
+  dataset_name: mnist
+  data_dir: ./data
+  num_clients: 10
+  num_test_clients: 10
+  batch_size: 64
+  num_workers: 4
+  input_size: 128
+  verbose: false
+  data_split: iid
+  alpha: 0.3
+
+model:
+  model_name: bit_s_r50x1
+  num_classes: 10
+  pretrained: true
+  freeze_backbone: true
+  lora:
+    enabled: true
+    r: 8
+    alpha: 16
+    dropout: 0.1
+
+training:
+  epochs: 1
+  lr: 0.0001
+  momentum: 0.9
+  weight_decay: 0.001
+
+federated:
+  num_rounds: 100
+  num_clients: 10
+  client_fraction: 1.0
+  aggregation_method: fedsa
+  checkpoint_freq: 25
+
+evaluation:
+  eval_freq: 2
+  metric: accuracy
+  save_best_model: true
+
+privacy:
+  enable_privacy: false
+  epsilon: 6.0
+  delta: 1.0e-5
+  max_grad_norm: 0.5
+  noise_multiplier: 1.2
+
+defense:
+  rolora_dp:
+    enabled: false
+    seed: 1234
+    rank: 8
+
+privacy_attacks:
+  membership_inference:
+    enabled: false
+    attack_batch_size: 64
+    max_member_batches: 2
+    max_nonmember_batches: 2
+    method: threshold
+  gradient_leakage:
+    enabled: false
+    optimization_steps: 300
+    attack_lr: 0.05
+    l2_regularizer: 1.0e-04
+    tv_regularizer: 1.0e-05
+    grad_weight: 1.0
+    label_weight: 0
+    optimize_labels: true
+    svd_topk: 1
+    shadow:
+      enabled: false
+      dataset: mnist
+      num_samples: 64
+      batch_size: 32
+      client_lr: 0.05
+      decoder_hidden: 512
+      decoder_lr: 0.001
+      decoder_epochs: 3
+  A_reconstruction:
+    enabled: true
+    method: svd
+    rounds_used: 10
+    refine_steps: 0
+
+reproducibility:
+  deterministic: false
+  seed: 2025

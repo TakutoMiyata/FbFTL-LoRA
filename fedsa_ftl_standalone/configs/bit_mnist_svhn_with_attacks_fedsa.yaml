@@ -6,9 +6,9 @@ data:
   data_dir: ./data
   num_clients: 10
   num_test_clients: 10
-  batch_size: 32
+  batch_size: 64
   num_workers: 4
-  input_size: 224
+  input_size: 128
   verbose: false
   data_split: iid
   alpha: 0.3
@@ -54,14 +54,14 @@ experiment:
 privacy_attacks:
   membership_inference:
     enabled: true
-    attack_batch_size: 32
+    attack_batch_size: 64
     max_member_batches: 10
     max_nonmember_batches: 10
     method: shadow
     shadow:
       lr: 0.05
       train_steps: 400
-      batch_size: 32
+      batch_size: 64
       weight_decay: 0.0
       feature_set: [delta_l2, delta_abs_mean]
       feature_update_lr: 0.1
