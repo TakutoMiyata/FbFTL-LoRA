@@ -1,6 +1,6 @@
 experiment:
   name: BiT_MNIST_SVHN_RoLoRA_DP
-  output_dir: experiments/quickstart_bit_mnist_svhn
+  output_dir: experiments/quickstart_bit_mnist_svhn/attack_for_A
 
 use_gpu: true
 
