@@ -25,10 +25,16 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Subset
 import yaml
+import sys
 
-from src.data_utils import prepare_federated_data
-from src.fedsa_ftl_client import FedSAFTLClient
-from src.fedsa_ftl_model_vit import create_model_vit
+ROOT_DIR = Path(__file__).resolve().parent
+SRC_DIR = ROOT_DIR / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from data_utils import prepare_federated_data
+from fedsa_ftl_client import FedSAFTLClient
+from fedsa_ftl_model_vit import create_model_vit
 
 
 os.environ.setdefault("TQDM_DISABLE", "0")
