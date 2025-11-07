@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Dual-B FedSA-LoRA quickstart for MNIST/SVHN with compact 64x64 inputs.
+Dual-B FedSA-LoRA quickstart for MNIST/SVHN with ViT-style backbones.
 
-Clients train local LoRA A/B matrices on a lightweight CNN backbone, while the server
+Clients train local LoRA A/B matrices on a ViT (or optional compact CNN) while the server
 maintains a shared B_server updated via stochastic policy gradients from forward-only
-rewards. Optionally, Monte-Carlo Shapley estimation can be enabled on a small eval set.
+rewards. Optional Monte-Carlo Shapley estimation evaluates client contributions.
 """
 
 import argparse
@@ -32,6 +32,7 @@ if str(SRC_DIR) not in sys.path:
 
 from fedsa_ftl_client import FedSAFTLClient
 from dual_b_small_cnn import SmallConvNetLoRA
+from fedsa_ftl_model_vit import create_model_vit
 
 
 def set_seed(seed: int):
@@ -157,6 +158,33 @@ def build_loader(dataset, indices: Sequence[int], batch_size: int, num_workers: 
         num_workers=num_workers,
         pin_memory=True,
     )
+
+
+def build_model(model_cfg: Dict):
+    backbone = model_cfg.get("backbone", "vit").lower()
+    if backbone == "vit":
+        vit_cfg = {
+            "num_classes": model_cfg.get("num_classes", 10),
+            "model_name": model_cfg.get("model_name", "vit_tiny"),
+            "lora_r": model_cfg.get("lora_r", 8),
+            "lora_alpha": model_cfg.get("lora_alpha", 16),
+            "lora_dropout": model_cfg.get("lora_dropout", 0.1),
+            "freeze_backbone": model_cfg.get("freeze_backbone", True),
+            "input_size": model_cfg.get("input_size", 160),
+        }
+        return create_model_vit(vit_cfg)
+    elif backbone == "small_cnn":
+        return SmallConvNetLoRA(
+            in_channels=model_cfg.get("in_channels", 1),
+            num_classes=model_cfg.get("num_classes", 10),
+            input_size=model_cfg.get("input_size", 64),
+            hidden_channels=model_cfg.get("hidden_channels", 64),
+            lora_r=model_cfg.get("lora_r", 4),
+            lora_alpha=model_cfg.get("lora_alpha", 16),
+            lora_dropout=model_cfg.get("lora_dropout", 0.05),
+        )
+    else:
+        raise ValueError(f"Unsupported backbone '{backbone}' for Dual-B quickstart")
 
 
 class DualBFedSAFTLClient(FedSAFTLClient):
@@ -394,15 +422,18 @@ def maybe_create_default_config(config_path: Path):
             "num_workers": 2,
             "data_split": "non_iid",
             "alpha": 0.5,
-            "input_size": 64,
+            "input_size": 160,
         },
         "model": {
+            "backbone": "vit",
+            "model_name": "vit_tiny",
             "num_classes": 10,
-            "in_channels": 1,
-            "hidden_channels": 48,
-            "lora_r": 4,
+            "in_channels": 3,
+            "input_size": 160,
+            "lora_r": 8,
             "lora_alpha": 16,
             "lora_dropout": 0.05,
+            "freeze_backbone": True,
         },
         "training": {
             "local_epochs": 1,
@@ -440,7 +471,7 @@ def maybe_create_default_config(config_path: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Dual-B FedSA-LoRA quickstart (MNIST/SVHN, 64x64 inputs)")
+    parser = argparse.ArgumentParser(description="Dual-B FedSA-LoRA quickstart (MNIST/SVHN, ViT backbone)")
     parser.add_argument(
         "--config",
         type=str,
@@ -466,25 +497,26 @@ def main():
     eval_cfg = config.get("evaluation", {})
 
     dataset_name = data_cfg.get("dataset_name", "mnist").lower()
-    inferred_channels = 1 if dataset_name == "mnist" else 3
-    num_channels = int(model_cfg.get("in_channels", inferred_channels))
-    model_cfg.setdefault("in_channels", num_channels)
-    model_cfg.setdefault("input_size", data_cfg.get("input_size", 64))
+    backbone_type = model_cfg.get("backbone", "vit").lower()
+    default_channels = 3 if backbone_type == "vit" else (1 if dataset_name == "mnist" else 3)
+    num_channels = int(model_cfg.get("in_channels", default_channels))
+    model_cfg["in_channels"] = num_channels
+    default_input = model_cfg.get(
+        "input_size",
+        data_cfg.get("input_size", 160 if backbone_type == "vit" else 64)
+    )
+    model_cfg["input_size"] = default_input
+    data_cfg["input_size"] = int(data_cfg.get("input_size", default_input))
     model_cfg.setdefault("num_classes", 10 if dataset_name == "mnist" else 10)
 
-    print(f"Loading {dataset_name.upper()} dataset with {num_channels} channel(s) at {model_cfg['input_size']}x{model_cfg['input_size']} ...")
+    print(
+        f"Loading {dataset_name.upper()} dataset with {num_channels} channel(s) "
+        f"at {data_cfg['input_size']}x{data_cfg['input_size']} for backbone '{backbone_type}' ..."
+    )
     trainset, testset = load_dataset(data_cfg, num_channels)
     train_splits, test_splits = prepare_federated_partitions(trainset, testset, data_cfg)
 
-    base_model = SmallConvNetLoRA(
-        in_channels=model_cfg["in_channels"],
-        num_classes=model_cfg["num_classes"],
-        input_size=model_cfg["input_size"],
-        hidden_channels=model_cfg.get("hidden_channels", 64),
-        lora_r=model_cfg.get("lora_r", 4),
-        lora_alpha=model_cfg.get("lora_alpha", 16),
-        lora_dropout=model_cfg.get("lora_dropout", 0.05),
-    ).to(device)
+    base_model = build_model(model_cfg).to(device)
 
     num_clients = int(data_cfg.get("num_clients", 4))
     batch_size = int(data_cfg.get("batch_size", 32))

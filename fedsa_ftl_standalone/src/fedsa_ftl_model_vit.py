@@ -201,12 +201,14 @@ class FedSAFTLModelViT(nn.Module):
     """
     
     def __init__(self, num_classes=100, model_name='vit_small', 
-                 lora_r=8, lora_alpha=16, lora_dropout=0.1, freeze_backbone=True):
+                 lora_r=8, lora_alpha=16, lora_dropout=0.1, freeze_backbone=True,
+                 input_size=224):
         super().__init__()
         
         self.model_name = model_name
         self.freeze_backbone = freeze_backbone
         self.num_classes = num_classes
+        self.input_size = input_size
         self.opacus_mode = False  # Flag for Opacus compatibility
         
         # Store LoRA configuration
@@ -251,7 +253,7 @@ class FedSAFTLModelViT(nn.Module):
         # 2. カスタムViTモデルをインスタンス化
         # 入力画像を224x224にリサイズしたので、事前学習と同じ設定にする
         self.backbone = VisionTransformer(
-            img_size=224,  # 事前学習と同じサイズ
+            img_size=self.input_size,
             patch_size=16, # 事前学習と同じパッチサイズ
             embed_dim=embed_dim,
             depth=depth,
@@ -265,7 +267,14 @@ class FedSAFTLModelViT(nn.Module):
         with torch.no_grad():
             # 事前学習と同じ設定なので直接コピー可能
             self.backbone.cls_token.copy_(timm_model.cls_token)
-            self.backbone.pos_embed.copy_(timm_model.pos_embed)
+            if self.backbone.pos_embed.shape == timm_model.pos_embed.shape:
+                self.backbone.pos_embed.copy_(timm_model.pos_embed)
+            else:
+                resized_pos = self._resize_positional_embedding(
+                    timm_model.pos_embed,
+                    self.backbone.num_patches
+                )
+                self.backbone.pos_embed.copy_(resized_pos)
             self.backbone.patch_embed.weight.copy_(timm_model.patch_embed.proj.weight)
             if hasattr(timm_model.patch_embed.proj, 'bias') and timm_model.patch_embed.proj.bias is not None:
                 self.backbone.patch_embed.bias.copy_(timm_model.patch_embed.proj.bias)
@@ -280,6 +289,26 @@ class FedSAFTLModelViT(nn.Module):
             for name, param in self.backbone.named_parameters():
                 if 'head' not in name:  # Don't freeze the classification head
                     param.requires_grad = False
+
+    def _resize_positional_embedding(self, pos_embed, new_num_patches):
+        """Resize positional embeddings when image resolution changes."""
+        cls_token = pos_embed[:, :1]
+        patch_tokens = pos_embed[:, 1:]
+        num_tokens = patch_tokens.shape[1]
+        old_size = int(math.sqrt(num_tokens))
+        new_size = int(math.sqrt(new_num_patches))
+        if old_size == new_size:
+            return pos_embed
+
+        patch_tokens = patch_tokens.reshape(1, old_size, old_size, -1).permute(0, 3, 1, 2)
+        patch_tokens = F.interpolate(
+            patch_tokens,
+            size=(new_size, new_size),
+            mode='bicubic',
+            align_corners=False
+        )
+        patch_tokens = patch_tokens.permute(0, 2, 3, 1).reshape(1, new_size * new_size, -1)
+        return torch.cat([cls_token, patch_tokens], dim=1)
     
     def _apply_lora_to_transformer(self):
         """Apply LoRA to transformer attention and MLP layers"""
@@ -527,5 +556,6 @@ def create_model_vit(config):
         lora_r=config.get('lora_r', 8),
         lora_alpha=config.get('lora_alpha', 16),
         lora_dropout=config.get('lora_dropout', 0.1),
-        freeze_backbone=config.get('freeze_backbone', True)
+        freeze_backbone=config.get('freeze_backbone', True),
+        input_size=config.get('input_size', 224)
     )

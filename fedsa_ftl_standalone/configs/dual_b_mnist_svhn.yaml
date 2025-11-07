@@ -9,39 +9,42 @@ data:
   num_workers: 8
   data_split: non_iid
   alpha: 0.5
-  input_size: 64
+  input_size: 160
 
 model:
+  backbone: vit
+  model_name: vit_tiny
   num_classes: 10
-  in_channels: 1
-  hidden_channels: 48
+  in_channels: 3
+  input_size: 160
   lora_r: 8
   lora_alpha: 16
-  lora_dropout: 0.05
+  lora_dropout: 0.0
+  freeze_backbone: true
 
 training:
   local_epochs: 1
-  learning_rate: 0.0005
+  learning_rate: 0.0002
   weight_decay: 0.0
   optimizer: adam
 
 federated:
-  num_rounds: 10
+  num_rounds: 15
   client_fraction: 1.0
 
 dual_b:
   server_lr: 0.05
-  noise_std: 0.01
+  noise_std: 0.005
   baseline_beta: 0.1
   max_reward_norm: 2.0
-  reward_batches: 1
+  reward_batches: 3
 
 shapley:
   enabled: true
-  samples: 3
-  eval_batches: 2
+  samples: 4
+  eval_batches: 4
   min_clients: 3
 
 evaluation:
-  server_eval_samples: 256
+  server_eval_samples: 512
   batch_size: 64
