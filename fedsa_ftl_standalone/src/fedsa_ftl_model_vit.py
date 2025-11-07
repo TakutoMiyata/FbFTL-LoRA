@@ -401,6 +401,30 @@ class FedSAFTLModelViT(nn.Module):
                     module.lora_A.data.copy_(lora_params[f"{name}.lora_A"])
                 if matrix_type in ['B', 'both'] and f"{name}.lora_B" in lora_params:
                     module.lora_B.data.copy_(lora_params[f"{name}.lora_B"])
+    
+    def get_server_B_params(self):
+        """Get current server-level B matrices."""
+        server_params = {}
+        for name, module in self.named_modules():
+            if isinstance(module, LoRALinear):
+                server_params[f"{name}.lora_B_server"] = module.get_server_B()
+        return server_params
+    
+    def set_server_B_params(self, server_params):
+        """Set server-level B matrices (used for evaluation/inference)."""
+        if not server_params:
+            return
+        for name, module in self.named_modules():
+            if isinstance(module, LoRALinear):
+                key = f"{name}.lora_B_server"
+                if key in server_params:
+                    module.set_server_B(server_params[key])
+    
+    def reset_server_B_params(self):
+        """Clear injected server-level B matrices."""
+        for module in self.modules():
+            if isinstance(module, LoRALinear):
+                module.reset_server_B()
 
 
 class LoRALinear(nn.Module):
@@ -444,6 +468,9 @@ class LoRALinear(nn.Module):
         std = 0.01 / math.sqrt(max(out_features, in_features))
         nn.init.normal_(self.lora_A, mean=0.0, std=std)
         nn.init.zeros_(self.lora_B)
+        
+        # Server-controlled B matrix (non-trainable buffer)
+        self.register_buffer('lora_B_server', torch.zeros(out_features, r))
     
     def forward(self, x):
         # Regular linear transformation with frozen weights
@@ -467,10 +494,26 @@ class LoRALinear(nn.Module):
             else:
                 x_dropout = x
             
-            lora_output = (x_dropout @ self.lora_A.T) @ self.lora_B.T * self.scaling
+            effective_B = self.lora_B + self.lora_B_server
+            lora_output = (x_dropout @ self.lora_A.T) @ effective_B.T * self.scaling
             result = result + lora_output
         
         return result
+    
+    def set_server_B(self, server_B_tensor):
+        """Inject server-controlled B matrix (no grad)."""
+        if server_B_tensor is None:
+            self.lora_B_server.zero_()
+        else:
+            self.lora_B_server.data.copy_(server_B_tensor.to(self.lora_B_server.device, self.lora_B_server.dtype))
+    
+    def get_server_B(self):
+        """Return a clone of the server-controlled B matrix."""
+        return self.lora_B_server.data.clone()
+    
+    def reset_server_B(self):
+        """Clear server contribution."""
+        self.lora_B_server.zero_()
     
     def extra_repr(self):
         return f'in_features={self.in_features}, out_features={self.out_features}, r={self.r}'
