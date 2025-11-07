@@ -492,6 +492,8 @@ def main():
     reward_batches = dual_b_cfg.get("reward_batches", 1)
 
     clients = []
+    client_eval_indices = {}
+
     for client_id in range(num_clients):
         client_model = copy.deepcopy(base_model).to(device)
         reward_loader = build_loader(
@@ -510,6 +512,7 @@ def main():
                 reward_max_batches=reward_batches,
             )
         )
+        client_eval_indices[client_id] = test_splits[client_id]
 
     server_eval_loader = None
     eval_samples = int(eval_cfg.get("server_eval_samples", 0))
@@ -544,6 +547,7 @@ def main():
 
         client_updates = []
         train_metrics = []
+        client_eval_stats = {}
 
         for client_id in selected:
             client = clients[client_id]
@@ -563,6 +567,20 @@ def main():
             client_updates.append(result)
             train_metrics.append((result["loss"], result["accuracy"]))
 
+            eval_loader = build_loader(
+                testset,
+                client_eval_indices[client_id],
+                batch_size=batch_size,
+                num_workers=num_workers,
+                shuffle=False,
+            )
+            eval_metrics = client.evaluate(eval_loader)
+            client_eval_stats[client_id] = {
+                "loss": float(eval_metrics["loss"]),
+                "accuracy": float(eval_metrics["accuracy"]),
+                "num_samples": int(eval_metrics["num_samples"]),
+            }
+
             perturbed_B = server.sample_perturbed_B(client_id)
             client.set_server_B(perturbed_B)
             reward_info = client.evaluate_server_reward()
@@ -577,6 +595,7 @@ def main():
         avg_loss = np.mean([m[0] for m in train_metrics]) if train_metrics else 0.0
         avg_acc = np.mean([m[1] for m in train_metrics]) if train_metrics else 0.0
         avg_reward = np.mean([u["reward"] for u in client_updates]) if client_updates else 0.0
+        avg_eval_acc = np.mean([stats["accuracy"] for stats in client_eval_stats.values()]) if client_eval_stats else 0.0
         comm_cost_mb = sum(param.numel() * 4 for param in aggregated_A.values()) / (1024 * 1024)
         round_duration = time.time() - round_start
 
@@ -587,16 +606,25 @@ def main():
                 "train_loss": avg_loss,
                 "train_accuracy": avg_acc,
                 "reward": avg_reward,
+                "eval_accuracy": avg_eval_acc,
                 "comm_mb": comm_cost_mb,
                 "duration_s": round_duration,
                 "shapley": shapley_scores,
+                "client_eval": client_eval_stats,
             }
         )
 
         print(
             f"Round {round_idx + 1}: loss={avg_loss:.4f}, acc={avg_acc:.2f}%, "
-            f"reward={avg_reward:.3f}, comm={comm_cost_mb:.2f}MB, time={round_duration:.1f}s"
+            f"reward={avg_reward:.3f}, comm={comm_cost_mb:.2f}MB, "
+            f"eval_acc={avg_eval_acc:.2f}%, time={round_duration:.1f}s"
         )
+        if client_eval_stats:
+            eval_summary = ", ".join(
+                f"C{cid}:{stats['accuracy']:.1f}%"
+                for cid, stats in sorted(client_eval_stats.items())
+            )
+            print(f"  Client eval acc: {eval_summary}")
         if shapley_scores:
             top = sorted(shapley_scores.items(), key=lambda kv: kv[1], reverse=True)
             summary = ", ".join([f"C{selected[idx]}:{score:.3f}" for idx, score in top[:3]])
