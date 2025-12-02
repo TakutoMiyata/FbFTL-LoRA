@@ -43,9 +43,9 @@ data:
       prob: 0.5
 training:
   epochs: 3
-  lr: 0.0001
+  lr: 0.001
   momentum: 0.9
-  weight_decay: 0.001
+  weight_decay: 0.01
   scheduler: cosine
   warmup_epochs: 0
   label_smoothing: 0.1
@@ -95,7 +95,7 @@ communication:
 model:
   model_name: bit_s_r50x1
   num_classes: 100
-  pretrained: true
-  freeze_backbone: true
+  pretrained: false
+  freeze_backbone: false
   lora:
     enabled: false

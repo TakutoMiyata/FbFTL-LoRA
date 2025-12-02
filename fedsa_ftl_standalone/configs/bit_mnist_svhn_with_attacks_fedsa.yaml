@@ -8,10 +8,39 @@ data:
   num_test_clients: 10
   batch_size: 64
   num_workers: 4
-  input_size: 128
+  pin_memory: true
+  input_size: 224
   verbose: false
+  imagenet_style: true
   data_split: iid
-  alpha: 0.3
+  seed: 42
+  augmentations:
+    horizontal_flip:
+      enabled: true
+      prob: 0.5
+    random_rotation:
+      enabled: true
+      degrees: 20
+    random_resized_crop:
+      enabled: true
+      scale_min: 0.4
+    color_jitter:
+      enabled: true
+      brightness: 0.3
+      contrast: 0.3
+      saturation: 0.3
+      hue: 0.1
+    random_erasing:
+      enabled: true
+      prob: 0.3
+    mixup:
+      enabled: false
+      alpha: 0.2
+      prob: 0.5
+    cutmix:
+      enabled: false
+      alpha: 1.0
+      prob: 0.5
 
 model:
   model_name: bit_s_r50x1
@@ -29,6 +58,11 @@ training:
   lr: 0.0001
   momentum: 0.9
   weight_decay: 0.001
+  scheduler: cosine
+  warmup_epochs: 0
+  label_smoothing: 0.1
+  gradient_clip: 1.0
+  optimizer: sgd
 
 federated:
   num_rounds: 100
@@ -36,16 +70,21 @@ federated:
   client_fraction: 1.0
   aggregation_method: fedsa
   checkpoint_freq: 25
+  exclude_bn_from_agg: true
 
 privacy:
   enable_privacy: false
-  epsilon: 6.0
-  delta: 1.0e-5
+  epsilon: 8.0
+  delta: 1.0e-05
   max_grad_norm: 0.5
-  noise_multiplier: 1.2
-
+  noise_multiplier: 1.0
+  target: lora_A
+  use_opacus_accounting: true
 evaluation:
-  eval_freq: 2
+  eval_freq: 3
+  metric: accuracy
+  save_best_model: true
+
 
 experiment:
   name: BiT_MNIST_AttackEval
