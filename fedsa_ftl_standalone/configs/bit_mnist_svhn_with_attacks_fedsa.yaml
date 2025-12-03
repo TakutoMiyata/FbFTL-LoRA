@@ -81,7 +81,7 @@ privacy:
   target: lora_A
   use_opacus_accounting: true
 evaluation:
-  eval_freq: 3
+  eval_freq: 5
   metric: accuracy
   save_best_model: true
 
@@ -93,18 +93,18 @@ experiment:
 privacy_attacks:
   membership_inference:
     enabled: true
-    attack_batch_size: 64
-    max_member_batches: 10
-    max_nonmember_batches: 10
-    method: shadow
+    attack_batch_size: 64           # DataLoader側のバッチサイズ。このままでOK
+    max_member_batches: 200         # ★ ここを増やす：200〜500程度
+    max_nonmember_batches: 200      # ★ 同上
+    method: threshold
     shadow:
-      lr: 0.05
-      train_steps: 400
-      batch_size: 64
-      weight_decay: 0.0
-      feature_set: [delta_l2, delta_abs_mean]
+      lr: 0.01                      # 少し小さめでも良い（0.01〜0.05あたり）
+      train_steps: 800              # 200〜1000くらい。計算資源と相談
+      batch_size: 64                # サンプル数が多くなるので64〜128程度
+      weight_decay: 1e-4            # わずかに正則化を入れてもよい
+      feature_set: [delta_l2, delta_abs_mean]  # まずはこのまま
       feature_update_lr: 0.1
-      feature_update_steps: 1
+      feature_update_steps: 1       # 必要なら3まで増やす
       normalize: true
   gradient_leakage:
     enabled: false

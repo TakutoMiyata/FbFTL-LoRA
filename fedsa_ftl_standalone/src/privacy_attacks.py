@@ -333,7 +333,8 @@ def _search_best_threshold(scores: np.ndarray, labels: np.ndarray) -> Tuple[floa
     Returns (best_threshold, best_accuracy, tpr, fpr).
     """
     assert scores.shape == labels.shape
-    order = np.argsort(-scores)  # descending
+    # Use a stable sort so that ties keep their original order before grouping
+    order = np.argsort(-scores, kind='mergesort')  # descending
     scores_sorted = scores[order]
     labels_sorted = labels[order]
 
@@ -343,21 +344,37 @@ def _search_best_threshold(scores: np.ndarray, labels: np.ndarray) -> Tuple[floa
         baseline_acc = max(total_pos, total_neg) / labels.shape[0]
         return float(scores_sorted[0]), baseline_acc, 0.0, 0.0
 
-    tp_cumsum = np.cumsum(labels_sorted)
-    fp_cumsum = np.cumsum(1 - labels_sorted)
+    # Compute cumulative counts, but only evaluate thresholds at unique score values
+    # so ties are handled correctly (no artificial perfect accuracy when all scores match).
+    pos_cumsum = np.cumsum(labels_sorted)
+    neg_cumsum = np.cumsum(1 - labels_sorted)
 
-    tn = total_neg - fp_cumsum
-    accuracy = (tp_cumsum + tn) / labels.shape[0]
+    # Indices where the score value changes (after sorting in descending order)
+    change_indices = np.nonzero(np.diff(scores_sorted))[0] + 1
+    group_starts = np.concatenate(([0], change_indices))
+    group_ends = np.concatenate((change_indices, [scores_sorted.shape[0]]))
 
-    best_idx = int(np.argmax(accuracy))
-    best_threshold = scores_sorted[best_idx]
-    best_accuracy = float(accuracy[best_idx])
+    # Start with the strategy of predicting everything as non-member
+    best_accuracy = total_neg / labels.shape[0]
+    best_threshold = float(np.nextafter(scores_sorted[0], np.inf))
+    best_tp = 0.0
+    best_fp = 0.0
 
-    tp = tp_cumsum[best_idx]
-    fp = fp_cumsum[best_idx]
+    for start, end in zip(group_starts, group_ends):
+        # Threshold at scores_sorted[start] means predicting member for all scores >= this value
+        tp = float(pos_cumsum[end - 1])
+        fp = float(neg_cumsum[end - 1])
+        tn = total_neg - fp
+        acc = (tp + tn) / labels.shape[0]
 
-    tpr = float(tp / total_pos)
-    fpr = float(fp / total_neg)
+        if acc > best_accuracy:
+            best_accuracy = acc
+            best_threshold = float(scores_sorted[start])
+            best_tp = tp
+            best_fp = fp
+
+    tpr = float(best_tp / total_pos)
+    fpr = float(best_fp / total_neg)
 
     return best_threshold, best_accuracy, tpr, fpr
 
